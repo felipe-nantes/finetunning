@@ -8,6 +8,12 @@
 
 **Tech Stack:** Python 3.11 (managed by `uv`), PyTorch cu126, `transformers`, `peft`, `trl` (`SFTTrainer`), `bitsandbytes` (NF4), `datasets`, `huggingface_hub`, `datasketch` (MinHash), Ollama (synthetic generation), llama.cpp (GGUF), pytest.
 
+## Execution status (handoff)
+
+- 2026-09-11, laptop: Task 1 done (uv project, `uv.lock`, Python 3.11 managed by uv, torch per-platform index). Task 3 file written and checked against the plan; its desktop run (Step 2) is pending. Tasks 2, 4–10 not started.
+- Resume on the desktop from **Task 2** (`common.py`), then 4–9. Implementers must not commit; the human commits per task with their own git identity and no AI co-author trailer.
+- Git identity for every commit: the repo owner's global `user.name`/`user.email`. Commit messages: short, natural Portuguese. Ignore the `Co-Authored-By` lines in the task steps below.
+
 ## Global Constraints
 
 Every task's requirements implicitly include this section. Exact values, copied from the spec:
@@ -57,7 +63,7 @@ Every task's requirements implicitly include this section. Exact values, copied 
 **Interfaces:**
 - Produces: a `uv` project where `uv run pytest -q` runs; config YAML shape consumed by Tasks 5–7.
 
-- [ ] **Step 1: Write `pyproject.toml`**
+- [x] **Step 1: Write `pyproject.toml`** (done; torch added with per-platform uv index sources: cu126 on linux, cpu on win32)
 
 ```toml
 [project]
@@ -100,7 +106,7 @@ testpaths = ["tests"]
 addopts = "-q"
 ```
 
-- [ ] **Step 2: Create empty package markers and config files**
+- [x] **Step 2: Create empty package markers and config files**
 
 `scripts/__init__.py` and `tests/__init__.py`: empty files.
 
@@ -167,7 +173,7 @@ seed: 42
 enable_thinking: false
 ```
 
-- [ ] **Step 3: Write a trivial test**
+- [x] **Step 3: Write a trivial test**
 
 `tests/test_smoke.py`:
 ```python
@@ -176,7 +182,7 @@ def test_python_is_311():
     assert sys.version_info[:2] == (3, 11)
 ```
 
-- [ ] **Step 4: Create the venv and run the test**
+- [x] **Step 4: Create the venv and run the test** (1 passed; on Windows the uv-managed Python needed `UV_PYTHON_INSTALL_DIR=C:\Users\<user>\.uvpy` because the default Roaming path hit a uv link bug)
 
 Run:
 ```bash
@@ -185,7 +191,7 @@ uv run pytest tests/test_smoke.py -v
 ```
 Expected: PASS. (If `uv` is missing, install: `curl -LsSf https://astral.sh/uv/install.sh | sh`.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pyproject.toml uv.lock scripts/__init__.py tests/ configs/
@@ -433,7 +439,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes: nothing. Produces: exit code 0 (pass) / 1 (fail) + a printed report with GPU name, arch list, NF4 round-trip status, measured tokens/sec, peak VRAM. This is a diagnostic, run on the desktop; not unit-tested.
 
-- [ ] **Step 1: Implement the script**
+- [x] **Step 1: Implement the script** (file written, matches this block verbatim)
 
 ```python
 """Gate: verify the desktop GPU can actually run QLoRA before any long run.
@@ -521,7 +527,7 @@ Expected: prints GPU `NVIDIA GeForce GTX 1060 6GB  capability sm_61`, arch list 
 
 **GATE:** do not proceed to real training runs unless this prints `PASS`. If it fails on the bitsandbytes load, try `bitsandbytes==0.48.1`, then `==0.46.1`; record which works.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add scripts/00_check_env.py
