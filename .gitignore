@@ -1,0 +1,20 @@
+# dados brutos e saídas pesadas
+data/raw/
+outputs/
+*.gguf
+*.safetensors
+*.bin
+*.pt
+
+# python
+.venv/
+__pycache__/
+*.pyc
+
+# logs
+runs/
+wandb/
+
+# so
+.DS_Store
+Thumbs.db
