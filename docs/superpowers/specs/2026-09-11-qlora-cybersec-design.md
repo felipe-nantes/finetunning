@@ -33,9 +33,9 @@ Resultado esperado:
 - Sem bf16. fp16 em GP106 roda a 1/64 da velocidade de fp32. **Todo compute em fp32.**
 - Unsloth exige compute capability 7.0+. **Não usar.**
 - Flash-attention, Triton, Liger kernels: sem suporte a sm_61. **Não usar.** Atenção via SDPA padrão do PyTorch.
-- PyTorch: builds `cu128+` removeram sm_61. **Pinar build `cu126`** (fallback `cu118`).
-- bitsandbytes: 4-bit NF4 e dequant funcionam em Pascal, mas versões novas ameaçam remover suporte. **Pinar 0.45–0.47** e validar com smoke test.
-- Modelos de 7B não cabem: NF4 ≈ 4GB + embeddings fp32 + pico de logits estoura 6GB.
+- PyTorch: as wheels **`cu126` x86_64 (2.14.x)** embarcam SASS para `sm_50;sm_60;sm_70;sm_75;sm_80;sm_86;sm_90` (verificado no `build_env_setup.py` da tag). O cubin `sm_60` roda no `sm_61` da GTX 1060 por compatibilidade de minor version (X.z executa em X.w com w ≥ z). As wheels **CUDA 13.x removeram `sm_50/60/70`** e por isso **não rodam** na 1060. **Pinar uma build `cu126`** (fallback `cu128`, que também tem `sm_60`; nunca `cu130+`). O gate `00_check_env` confirma empiricamente, não confia só na lista.
+- bitsandbytes: a documentação oficial (até 0.50.x) lista **NF4/FP4 para Compute Capability 6.0+**, citando explicitamente a série GTX 10x0 (Pascal). Ou seja, Pascal **não** foi removido. **Pinar uma versão recente conhecida** (ex.: 0.48–0.50) e validar no smoke test, em vez de assumir que quebrou. LLM.int8() (8-bit) exige 7.5+, mas não é usado aqui.
+- Modelos de 7B não cabem: NF4 ≈ 4GB + embeddings/lm_head fp32 + ativações estouram 6GB.
 
 ### Idioma
 
@@ -82,6 +82,13 @@ Passo obrigatório no plano: antes de baixar, verificar se surgiu modelo pequeno
 recente com licença permissiva e suporte a PT. Se sim, avaliar troca; a decisão fica
 registrada no README.
 
+**Decisão registrada (2026-09-11):** já existe a família `Qwen3.5` (2B/4B) em Apache 2.0,
+mas são modelos **multimodais com atenção linear híbrida** (`Qwen3_5ForConditionalGeneration`,
+vocab 248k, camadas de visão) — arquitetura nova, com suporte imaturo em `transformers`
+pinado, `bitsandbytes` e `llama.cpp`, e vocabulário maior que piora o orçamento de VRAM em
+6GB. Por isso a base primária continua **Qwen3-1.7B** (texto puro, vocab 151k, suporte
+universal e comprovado em GGUF). Qwen3.5 fica anotado como experimento futuro no README.
+
 ### Orçamento de VRAM (Qwen3-1.7B, seq 768, batch 1)
 
 | Item | ~GB |
@@ -90,9 +97,12 @@ registrada no README.
 | Embeddings / lm_head em fp32 (não quantizados) | 1.2 |
 | LoRA + estados do otimizador | 0.3 |
 | Ativações com gradient checkpointing | 0.5 |
-| Pico de logits + loss (vocab ~151k × seq × 4 bytes, ×2 com gradiente) | 1.5 |
-| **Total estimado** | **~4.3** |
+| Pico de logits + loss | 0.4 |
+| **Total estimado** | **~3.2** |
 
+O pico de logits é baixo porque a TRL usa por padrão `loss_type="chunked_nll"`: a projeção do
+`lm_head` é feita só nos tokens não-mascarados, em blocos, mantendo vivo apenas
+`chunk_size × vocab` de logits por vez. Sem isso, o vocab de 151k dominaria a memória.
 Para o 4B, seq cai para 512 e o run só acontece se o pico medido no 1.7B ficar abaixo de 5GB.
 
 ## 6. Ambiente
@@ -101,8 +111,8 @@ Desktop, dentro do WSL2 Ubuntu:
 
 - Driver NVIDIA instalado **no Windows** (≥ 535, com suporte WSL). Nenhum driver dentro do WSL. `nvidia-smi` funcionando no WSL é o critério.
 - Python 3.11 gerenciado por `uv`, venv isolado, deps pinadas em `pyproject.toml`.
-- `torch` do índice `https://download.pytorch.org/whl/cu126`. Verificar que `torch.cuda.get_arch_list()` contém `sm_61`.
-- `bitsandbytes` pinado (0.45.x a 0.47.x, a versão exata fixada no plano após teste).
+- `torch` do índice `https://download.pytorch.org/whl/cu126`. Verificar que `torch.cuda.get_arch_list()` contém `sm_60` **ou** `sm_61` (o `sm_60` cobre a 1060). `dtype=torch.float32` no `from_pretrained` (kwarg `dtype`; `torch_dtype` está deprecado na `transformers` 5.x).
+- `bitsandbytes` pinado numa versão recente conhecida (ex.: 0.48–0.50), validada no smoke test.
 - `transformers`, `peft`, `trl`, `datasets`, `accelerate` pinados na versão vigente no início da implementação.
 - `ollama` instalado no Windows do desktop (usa a GPU nativamente) para a geração sintética.
 - `llama.cpp` clonado e compilado no WSL (só CPU basta) para conversão e quantização.
@@ -136,13 +146,14 @@ e o escopo (metodologia, ferramentas, análise, mitigação).
 
 ### Camada A: base pública (~3.000 exemplos, EN)
 
-Candidatos no Hugging Face (o plano valida existência, conteúdo e licença antes de usar;
-só entram datasets cuja licença permita redistribuição do derivado):
+Fontes validadas no Hugging Face (existência, schema e licença conferidos em 2026-09-11):
 
-- `Trendyol/Trendyol-Cybersecurity-Instruction-Tuning-Dataset`
-- `AlicanKiraz0/Cybersecurity-Dataset-v1`
-- `Isamu136/penetration_testing_scraped_dataset`
-- `Nitral-AI/Cybersecurity-ShareGPT`
+- `Trendyol/Trendyol-Cybersecurity-Instruction-Tuning-Dataset` — **apache-2.0**, 53.201 linhas, schema `{system, user, assistant}` em EN. Fonte principal.
+- `AlicanKiraz0/Cybersecurity-Dataset-v1` — **apache-2.0**, 2.411 linhas, mesmo schema. Fonte secundária.
+
+Descartados: `Isamu136/penetration_testing_scraped_dataset` (sem licença declarada) e
+`Nitral-AI/Cybersecurity-ShareGPT` (não encontrado / 404). Os dois de cima já entregam o
+schema exato e volume de sobra para o cap de 3.000.
 
 Filtros, nesta ordem:
 
@@ -177,6 +188,7 @@ Filtros, nesta ordem:
 - 95% treino / 5% validação, estratificado por `source`. O val nunca é usado em nada além de loss.
 - `data/manifest.json`: para cada fonte, URL, licença, contagem bruta, contagem após filtros, seed usada.
 - Scripts `01_build_dataset.py` e `02_gen_synthetic.py` com seed fixa. `data/raw/` fica fora do git; `data/processed/` vai para o Hub.
+- **Licença do dataset publicado: `cc-by-sa-4.0`**, escolhida como guarda-chuva que satisfaz o share-alike do OWASP WSTG. Um arquivo `NOTICE` credita cada fonte e sua licença original (Trendyol e AlicanKiraz0 apache-2.0; ATT&CK e CWE sob a licença permissiva do MITRE com atribuição; WSTG CC BY-SA 4.0). Manter treino = publicado preserva a reprodutibilidade, e a documentação da diligência de licença é um ponto a favor no portfólio.
 
 ## 8. Treino
 
@@ -191,7 +203,7 @@ BitsAndBytesConfig(
     bnb_4bit_use_double_quant=True,
     bnb_4bit_compute_dtype=torch.float32,
 )
-# torch_dtype=torch.float32 para embeddings, norms e lm_head
+# dtype=torch.float32 (kwarg novo) para embeddings, norms e lm_head
 ```
 
 `prepare_model_for_kbit_training` + `gradient_checkpointing_enable`.
@@ -218,10 +230,20 @@ BitsAndBytesConfig(
 
 Config `4b`: seq 512, resto igual. Config `smoke`: 0.6B, 100 steps, 200 exemplos.
 
-### Chat template Qwen3
+### Chat template Qwen3 e máscara de loss
 
-Modo não-pensante: cada turno de assistant recebe `<think>\n\n</think>\n\n` vazio antes
-da resposta, conforme recomendação do Qwen para SFT sem raciocínio.
+O template do Qwen3 **não** tem blocos `{% generation %}`, então `assistant_only_loss=True`
+da TRL não funciona direto. Em vez de editar o template, o `03_train.py` converte cada
+exemplo `messages` em par **prompt/completion** no momento do load:
+
+- `prompt = tokenizer.apply_chat_template(messages[:-1], add_generation_prompt=True, tokenize=False, enable_thinking=False)`
+- `completion = messages[-1]["content"] + tokenizer.eos_token`
+
+Com dataset prompt/completion, a TRL ativa `completion_only_loss` por padrão (loss só na
+resposta). O que o template emite como prefixo de geração é, por definição, o mesmo que o
+modelo verá na inferência, garantindo consistência treino/inferência. O smoke test imprime
+um exemplo renderizado para conferir o prefixo (incluindo o bloco `<think>` vazio, se o
+template o inserir).
 
 ### Robustez
 
@@ -243,9 +265,12 @@ tokens; 1.7B a 100–150 tok/s ≈ 8–11h.
 
 `scripts/04_eval.py`, sempre base vs. adapter, mesma seed.
 
-1. **MCQ objetivo** — `CyberMetric-500` (fallback `zefang-liu/SecQA`). Zero-shot, pontuação por
-   log-likelihood da letra da alternativa. Saída: acurácia + IC bootstrap 95%. Vai para README e model card.
-   Expectativa honesta: ganho pequeno; SFT de 4k exemplos ensina foco e estilo mais do que conhecimento.
+1. **MCQ objetivo** — `CyberMetric-500` (JSON no GitHub, schema `{question, answers{A..D}, solution}`;
+   fallback `zefang-liu/SecQA`). Zero-shot, pontuação por log-likelihood da letra da alternativa.
+   Saída: acurácia + IC bootstrap 95%. Vai para README e model card. **CyberMetric não tem licença
+   de redistribuição** (só pedido de citação), então é baixado em tempo de avaliação e **nunca
+   entra no dataset publicado**; o paper é citado no README. Expectativa honesta: ganho pequeno;
+   SFT de 4k exemplos ensina foco e estilo mais do que conhecimento.
 2. **Val loss / perplexidade** no split de 5%.
 3. **Qualitativo fixo** — `eval/prompts.jsonl` com 12 prompts congelados (8 EN, 4 PT): recon, web,
    privesc, interpretação de saída de nmap, mitigação, 1 fora de escopo. Geração com temperatura 0,
