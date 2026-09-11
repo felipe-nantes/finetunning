@@ -18,3 +18,11 @@ wandb/
 # so
 .DS_Store
 Thumbs.db
+
+# sdd workspace / seeds / processed data (published to HF Hub, not git)
+.superpowers/
+data/seeds/*
+!data/seeds/.gitkeep
+data/processed/*.jsonl
+data/processed/README.md
+*.egg-info/
