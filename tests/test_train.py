@@ -7,6 +7,8 @@ def test_build_lora_config_targets():
     assert lc.r == 16 and lc.lora_alpha == 32
     for m in ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]:
         assert m in lc.target_modules
+    assert lc.bias == "none"
+    assert lc.task_type == "CAUSAL_LM"
 
 
 def test_render_dataset_produces_prompt_completion():
@@ -22,7 +24,7 @@ def test_render_dataset_produces_prompt_completion():
         {"role": "assistant", "content": "a"},
     ], "source": "x", "lang": "en", "theme": "web"}])
     out = train.render_dataset(ds, FakeTok())
-    assert set(out.column_names) >= {"prompt", "completion"}
+    assert set(out.column_names) == {"prompt", "completion"}
     assert out[0]["completion"] == "a<|end|>"
 
 
@@ -38,3 +40,12 @@ def test_build_sft_config_pascal_safe(tmp_path):
     assert sft.optim == "adamw_torch"
     assert sft.lr_scheduler_type == "cosine"
     assert sft.gradient_checkpointing is True
+
+
+def test_last_checkpoint_ignores_non_numeric_entries(tmp_path):
+    (tmp_path / "checkpoint-10").mkdir()
+    (tmp_path / "checkpoint-200").mkdir()
+    (tmp_path / "checkpoint-notes.txt").write_text("not a checkpoint dir")
+    (tmp_path / "checkpoint-final").mkdir()
+    assert train._last_checkpoint(str(tmp_path)).endswith("checkpoint-200")
+    assert train._last_checkpoint(str(tmp_path / "missing")) is None

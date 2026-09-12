@@ -9,6 +9,7 @@ import torch
 from datasets import load_dataset
 from peft import LoraConfig, prepare_model_for_kbit_training
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers.trainer_utils import get_last_checkpoint
 from trl import SFTTrainer, SFTConfig
 
 from scripts import common
@@ -99,10 +100,7 @@ def main() -> None:
 def _last_checkpoint(output_dir: str):
     if not os.path.isdir(output_dir):
         return None
-    cks = [d for d in os.listdir(output_dir) if d.startswith("checkpoint-")]
-    if not cks:
-        return None
-    return os.path.join(output_dir, sorted(cks, key=lambda x: int(x.split("-")[1]))[-1])
+    return get_last_checkpoint(output_dir)
 
 
 if __name__ == "__main__":
