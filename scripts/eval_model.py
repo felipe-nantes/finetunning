@@ -89,17 +89,27 @@ def mcq_accuracy(tok, model, items):
     return flags
 
 
+def val_example(tok, prompt: str, completion: str) -> tuple[list[int], list[int]]:
+    prompt_ids = tok(prompt, add_special_tokens=False).input_ids
+    full_ids = tok(prompt + completion, add_special_tokens=False).input_ids
+    if full_ids[: len(prompt_ids)] != prompt_ids:
+        print(f"warning: prompt/completion tokenization seam mismatch for prompt={prompt!r}")
+    labels = completion_labels(prompt_ids, full_ids[len(prompt_ids):])
+    return full_ids, labels
+
+
 @torch.no_grad()
 def val_loss(tok, model, rows, max_examples: int = 100) -> float:
     losses = []
     for row in rows[:max_examples]:
         pc = common.to_prompt_completion(row, tok)
-        prompt_ids = tok(pc["prompt"], add_special_tokens=False).input_ids
-        completion_ids = tok(pc["completion"], add_special_tokens=False).input_ids
-        input_ids = torch.tensor([prompt_ids + completion_ids]).to("cuda")
-        labels = torch.tensor([completion_labels(prompt_ids, completion_ids)]).to("cuda")
-        out = model(input_ids=input_ids, labels=labels)
+        full_ids, labels = val_example(tok, pc["prompt"], pc["completion"])
+        input_ids = torch.tensor([full_ids]).to("cuda")
+        label_ids = torch.tensor([labels]).to("cuda")
+        out = model(input_ids=input_ids, labels=label_ids)
         losses.append(out.loss.item())
+    if not losses:
+        return float("nan")
     return sum(losses) / len(losses)
 
 

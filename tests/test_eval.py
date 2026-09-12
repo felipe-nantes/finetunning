@@ -59,3 +59,27 @@ def test_letter_token_id_single_token():
 def test_letter_token_id_multi_token_raises():
     with pytest.raises(ValueError):
         ev._letter_token_id(_FakeTokMulti(), "A")
+
+
+class _FakeTokOrd:
+    def __call__(self, text, add_special_tokens=True):
+        return SimpleNamespace(input_ids=[ord(c) for c in text])
+
+
+class _FakeTokSeamMismatch:
+    def __call__(self, text, add_special_tokens=True):
+        if text == "ab":
+            return SimpleNamespace(input_ids=[1])
+        return SimpleNamespace(input_ids=[7, 7, 7])
+
+
+def test_val_example_uses_joint_tokenization():
+    full_ids, labels = ev.val_example(_FakeTokOrd(), "ab", "cd")
+    assert full_ids == [97, 98, 99, 100]
+    assert labels == [-100, -100, 99, 100]
+
+
+def test_val_example_seam_mismatch_does_not_raise():
+    full_ids, labels = ev.val_example(_FakeTokSeamMismatch(), "ab", "cd")
+    assert full_ids == [7, 7, 7]
+    assert labels == [-100, 7, 7]
