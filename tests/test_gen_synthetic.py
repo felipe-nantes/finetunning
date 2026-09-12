@@ -72,6 +72,25 @@ def test_download_to_writes_only_on_success(tmp_path, monkeypatch):
     assert not dest_fail.exists()
 
 
+def test_parse_pairs_skips_non_dict_lists():
+    cases = [
+        'Here are 3 examples: [1, 2, 3]\n[{"question": "What is XSS?", "answer": "Cross-site scripting"}]',
+        'Options: ["a", "b"]\n[{"question": "What is XSS?", "answer": "Cross-site scripting"}]',
+        'Nothing yet: []\n[{"question": "What is XSS?", "answer": "Cross-site scripting"}]',
+    ]
+    for raw in cases:
+        pairs = gs.parse_pairs(raw)
+        assert len(pairs) == 1
+        assert pairs[0]["question"] == "What is XSS?"
+
+
+def test_parse_pairs_empty_list_then_real():
+    raw = '[]\n[{"question":"Q","answer":"A"}]'
+    pairs = gs.parse_pairs(raw)
+    assert len(pairs) == 1
+    assert pairs[0]["question"] == "Q"
+
+
 def test_update_manifest_accumulates(tmp_path):
     path = str(tmp_path / "manifest.json")
     gs._update_manifest(

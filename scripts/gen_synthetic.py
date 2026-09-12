@@ -111,11 +111,23 @@ def anchored(answer: str, chunk: str, k: int = 2) -> bool:
     return len(_key_terms(answer) & _key_terms(chunk)) >= k
 
 
+def _looks_like_pairs(candidate) -> bool:
+    """True if candidate is a non-empty list of dicts, at least one of which
+    carries both a "question" and an "answer" key. Filters out lists the
+    model emitted for unrelated reasons ([], [1, 2, 3], ["a", "b"], ...)
+    so they don't get mistaken for the actual Q/A array."""
+    if not isinstance(candidate, list) or not candidate:
+        return False
+    if not all(isinstance(d, dict) for d in candidate):
+        return False
+    return any("question" in d and "answer" in d for d in candidate)
+
+
 def parse_pairs(raw: str) -> list[dict]:
     data = None
     try:
         candidate = json.loads(raw)
-        if isinstance(candidate, list):
+        if _looks_like_pairs(candidate):
             data = candidate
     except json.JSONDecodeError:
         pass
@@ -128,13 +140,15 @@ def parse_pairs(raw: str) -> list[dict]:
                 candidate, _ = decoder.raw_decode(raw, i)
             except json.JSONDecodeError:
                 continue
-            if isinstance(candidate, list):
+            if _looks_like_pairs(candidate):
                 data = candidate
                 break
     if data is None:
         return []
     out = []
     for d in data:
+        if not isinstance(d, dict):
+            continue
         q, a = (d.get("question") or "").strip(), (d.get("answer") or "").strip()
         if q and a:
             out.append({"question": q, "answer": a})
@@ -236,21 +250,25 @@ def main() -> None:
                 raw = ollama_chat(args.model, build_gen_prompt(chunk, lang))
             except Exception as e:
                 print(f"gen error ({source_tag}): {e}"); continue
-            for pair in parse_pairs(raw):
-                if not common.response_len_ok(pair["answer"]):
-                    continue
-                if not anchored(pair["answer"], chunk, k=2):
-                    continue
-                rows.append({
-                    "messages": [
-                        {"role": "system", "content": common.SYSTEM_PROMPT},
-                        {"role": "user", "content": pair["question"]},
-                        {"role": "assistant", "content": pair["answer"]},
-                    ],
-                    "source": source_tag, "lang": lang,
-                    "theme": common.tag_theme(pair["question"] + " " + pair["answer"]),
-                })
-                made += 1
+            try:
+                for pair in parse_pairs(raw):
+                    if not common.response_len_ok(pair["answer"]):
+                        continue
+                    if not anchored(pair["answer"], chunk, k=2):
+                        continue
+                    rows.append({
+                        "messages": [
+                            {"role": "system", "content": common.SYSTEM_PROMPT},
+                            {"role": "user", "content": pair["question"]},
+                            {"role": "assistant", "content": pair["answer"]},
+                        ],
+                        "source": source_tag, "lang": lang,
+                        "theme": common.tag_theme(pair["question"] + " " + pair["answer"]),
+                    })
+                    made += 1
+            except Exception as e:
+                print(f"parse error ({source_tag}): {e}")
+                continue
         print(f"progress: {made}/{args.target}")
 
     rows = common.exact_dedup(rows)
