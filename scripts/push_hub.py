@@ -105,7 +105,7 @@ def main() -> None:
 
     api.create_repo(gguf_repo, exist_ok=True)
     api.upload_folder(folder_path=os.path.join(run, "gguf"), repo_id=gguf_repo,
-                      allow_patterns=["*.gguf", "Modelfile"])
+                      allow_patterns=["*.gguf", "Modelfile"], ignore_patterns=["*-f16.gguf"])
 
     api.create_repo(data_repo, repo_type="dataset", exist_ok=True)
     with open("data/processed/README.md", "w", encoding="utf-8") as fh:
@@ -113,6 +113,8 @@ def main() -> None:
     api.upload_folder(folder_path="data/processed", repo_id=data_repo, repo_type="dataset",
                       allow_patterns=["*.jsonl", "README.md"])
     api.upload_file(path_or_fileobj="NOTICE", path_in_repo="NOTICE", repo_id=data_repo, repo_type="dataset")
+    api.upload_file(path_or_fileobj="data/manifest.json", path_in_repo="manifest.json",
+                    repo_id=data_repo, repo_type="dataset")
     print("pushed:", lora_repo, gguf_repo, data_repo)
 
 

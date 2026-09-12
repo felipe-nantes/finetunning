@@ -69,22 +69,20 @@ def _letter_token_id(tok, letter: str) -> int:
 
 
 @torch.no_grad()
-def _letter_logprob(tok, model, question, choices, letter):
-    letter_id = _letter_token_id(tok, letter)
+def _choice_logprobs(tok, model, question, choices) -> dict[str, float]:
+    """Log-probability of each answer letter, in a single forward pass."""
     prompt = f"{question}\n" + "\n".join(f"{k}. {v}" for k, v in choices.items()) + "\nAnswer:"
-    ids = tok(prompt + " " + letter, return_tensors="pt").input_ids.to("cuda")
-    if ids[0, -1].item() != letter_id:
-        raise ValueError("in-context letter token mismatch")
+    ids = tok(prompt, return_tensors="pt").input_ids.to("cuda")
     out = model(ids)
-    logprobs = torch.log_softmax(out.logits[0, -2], dim=-1)  # predicts the letter token
-    return logprobs[letter_id].item()
+    logprobs = torch.log_softmax(out.logits[0, -1], dim=-1)  # predicts the letter token
+    return {letter: logprobs[_letter_token_id(tok, letter)].item() for letter in choices}
 
 
 @torch.no_grad()
 def mcq_accuracy(tok, model, items):
     flags = []
     for it in items:
-        lp = {L: _letter_logprob(tok, model, it["question"], it["choices"], L) for L in it["choices"]}
+        lp = _choice_logprobs(tok, model, it["question"], it["choices"])
         flags.append(int(score_choice(lp) == it["answer"]))
     return flags
 
@@ -99,11 +97,12 @@ def val_example(tok, prompt: str, completion: str) -> tuple[list[int], list[int]
 
 
 @torch.no_grad()
-def val_loss(tok, model, rows, max_examples: int = 100) -> float:
+def val_loss(tok, model, rows, max_examples: int = 100, max_length: int = 768) -> float:
     losses = []
     for row in rows[:max_examples]:
         pc = common.to_prompt_completion(row, tok)
         full_ids, labels = val_example(tok, pc["prompt"], pc["completion"])
+        full_ids, labels = full_ids[:max_length], labels[:max_length]
         input_ids = torch.tensor([full_ids]).to("cuda")
         label_ids = torch.tensor([labels]).to("cuda")
         out = model(input_ids=input_ids, labels=label_ids)
@@ -149,17 +148,18 @@ def main() -> None:
         flags = mcq_accuracy(tok, model, items)
         acc, lo, hi = bootstrap_ci(flags)
         results[label] = {"mcq_acc": acc, "ci95": [lo, hi], "n": len(flags),
-                          "val_loss": val_loss(tok, model, val_rows, args.max_val)}
+                          "val_loss": val_loss(tok, model, val_rows, args.max_val, cfg["max_length"])}
         for p in q_prompts + r_prompts:
             samples.append({"set": p["set"],
                             "lang": p["lang"], "prompt": p["prompt"],
                             "model": label, "output": _generate(tok, model, p["prompt"])})
+        # Write after each model so a crash in the adapter pass still leaves the base numbers.
+        with open("docs/eval_results.json", "w", encoding="utf-8") as fh:
+            json.dump(results, fh, indent=2)
         del model
         gc.collect()
         torch.cuda.empty_cache()
 
-    with open("docs/eval_results.json", "w", encoding="utf-8") as fh:
-        json.dump(results, fh, indent=2)
     _write_samples_md(samples)
     print(json.dumps(results, indent=2))
 

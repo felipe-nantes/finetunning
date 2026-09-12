@@ -10,7 +10,6 @@ import urllib.request
 
 from scripts import common
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
 STOPWORDS = set("the a an of to and or for with in on is are be how what "
                 "why when your you i it this that as by from at".split())
 
@@ -93,7 +92,7 @@ def fetch_seeds(seeds_dir: str) -> None:
     src_docs = os.path.join(wstg_src, "document", "4-Web_Application_Security_Testing")
     for root, _, files in os.walk(src_docs):
         for f in files:
-            if f.endswith(".md"):
+            if f.endswith(".md") and f != "README.md":
                 shutil.copy2(os.path.join(root, f), os.path.join(seeds_dir, "wstg", f))
 
 
@@ -160,27 +159,43 @@ def build_gen_prompt(chunk: str, lang: str) -> str:
         return (
             "Você é um instrutor de segurança ofensiva autorizada. Com base APENAS no "
             "texto abaixo, gere de 2 a 3 pares pergunta/resposta técnicos em PORTUGUÊS, "
-            "focados em teste autorizado, metodologia e mitigação. Não invente fatos fora "
-            "do texto. Responda SÓ com um array JSON de objetos {\"question\",\"answer\"}.\n\n"
+            "focados em teste autorizado, metodologia e mitigação. Cada resposta deve ter "
+            "entre 120 e 300 palavras. Não invente fatos fora do texto. Responda SÓ com um "
+            "array JSON de objetos {\"question\",\"answer\"}.\n\n"
             f"TEXTO:\n{chunk}"
         )
     return (
         "You are an authorized offensive-security instructor. Using ONLY the text below, "
         "write 2-3 technical question/answer pairs in ENGLISH about authorized testing, "
-        "methodology, and mitigation. Do not invent facts beyond the text. Reply with ONLY "
-        "a JSON array of objects {\"question\",\"answer\"}.\n\n"
+        "methodology, and mitigation. Each answer must be 120-300 words long. Do not invent "
+        "facts beyond the text. Reply with ONLY a JSON array of objects "
+        "{\"question\",\"answer\"}.\n\n"
         f"TEXT:\n{chunk}"
     )
 
 
-def ollama_chat(model: str, prompt: str, timeout: int = 180) -> str:
+def resolve_ollama_url(cli: str | None, env: str | None) -> str:
+    """Resolve the Ollama /api/chat endpoint: CLI flag > OLLAMA_HOST env > localhost.
+
+    Accepts a bare "host:port" (no scheme), which is normalized to http://.
+    Needed because on the desktop (Windows + WSL2), Ollama running on Windows
+    is not reachable at localhost from inside WSL2.
+    """
+    base = cli or env or "http://localhost:11434"
+    if "://" not in base:
+        base = "http://" + base
+    base = base.rstrip("/")
+    return f"{base}/api/chat"
+
+
+def ollama_chat(model: str, prompt: str, url: str, timeout: int = 180) -> str:
     body = json.dumps({
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
         "options": {"temperature": 0.7},
     }).encode("utf-8")
-    req = urllib.request.Request(OLLAMA_URL, data=body, headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read())["message"]["content"]
 
@@ -225,6 +240,8 @@ def main() -> None:
     ap.add_argument("--val-frac", type=float, default=0.05)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--fetch-seeds", action="store_true")
+    ap.add_argument("--ollama-url", default=None, help="CLI override; else OLLAMA_HOST env; else localhost")
+    ap.add_argument("--max-consecutive-failures", type=int, default=5)
     args = ap.parse_args()
 
     if args.fetch_seeds:
@@ -232,13 +249,15 @@ def main() -> None:
         print(f"seeds ready in {args.seeds_dir}")
         return
 
+    url = resolve_ollama_url(args.ollama_url, os.environ.get("OLLAMA_HOST"))
+
     rng = random.Random(args.seed)
     units = _load_seed_texts(args.seeds_dir)
     if not units:
         raise SystemExit(f"no seeds found in {args.seeds_dir}; run the fetch step (README).")
     rng.shuffle(units)
 
-    rows, made = [], 0
+    rows, made, consecutive_failures = [], 0, 0
     for source_tag, text in units:
         if made >= args.target:
             break
@@ -247,9 +266,17 @@ def main() -> None:
                 break
             lang = "pt" if rng.random() < args.pt_frac else "en"
             try:
-                raw = ollama_chat(args.model, build_gen_prompt(chunk, lang))
+                raw = ollama_chat(args.model, build_gen_prompt(chunk, lang), url)
             except Exception as e:
-                print(f"gen error ({source_tag}): {e}"); continue
+                print(f"gen error ({source_tag}): {e}")
+                consecutive_failures += 1
+                if consecutive_failures >= args.max_consecutive_failures:
+                    raise SystemExit(
+                        f"{consecutive_failures} consecutive Ollama failures at {url}; "
+                        "is Ollama running and reachable from WSL2?"
+                    )
+                continue
+            consecutive_failures = 0
             try:
                 for pair in parse_pairs(raw):
                     if not common.response_len_ok(pair["answer"]):
@@ -277,7 +304,7 @@ def main() -> None:
     n_val = max(1, int(len(rows) * args.val_frac))
     _append_jsonl(os.path.join(args.out_dir, "val.jsonl"), rows[:n_val])
     _append_jsonl(os.path.join(args.out_dir, "train.jsonl"), rows[n_val:])
-    _update_manifest(rows, args.model)
+    _update_manifest(rows, args.model, n_val=n_val)
     print(f"synthetic added: {len(rows)} (val {n_val})")
 
 
@@ -287,7 +314,7 @@ def _append_jsonl(path, rows):
             fh.write(json.dumps(r, ensure_ascii=False) + "\n")
 
 
-def _update_manifest(rows, model, path="data/manifest.json"):
+def _update_manifest(rows, model, path="data/manifest.json", n_val=0):
     if os.path.exists(path):
         with open(path, encoding="utf-8") as fh:
             man = json.load(fh)
@@ -313,6 +340,9 @@ def _update_manifest(rows, model, path="data/manifest.json"):
         man["synthetic"] = {"model": model, "models": models, "added": added, "by_source": merged_by_source}
     else:
         man["synthetic"] = {"model": model, "models": [model], "added": len(rows), "by_source": by_source}
+
+    man["train"] = man.get("train", 0) + (len(rows) - n_val)
+    man["val"] = man.get("val", 0) + n_val
 
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(man, fh, indent=2, ensure_ascii=False)

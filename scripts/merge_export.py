@@ -10,15 +10,52 @@ import torch
 
 from scripts import common
 
+# Ollama Go template that reproduces the Qwen3 chat format used at training time
+# (see scripts/common.py:to_prompt_completion). ASSISTANT_PREFIX is a literal
+# placeholder substituted with the exact generation-prompt suffix the training
+# tokenizer emits (e.g. "<|im_start|>assistant\n<think>\n\n</think>\n\n" for
+# Qwen3 non-thinking), so Ollama's inference-time prompt matches training exactly.
+_MODELFILE_TEMPLATE = '''TEMPLATE """{{- if .System }}<|im_start|>system
+{{ .System }}<|im_end|>
+{{ end }}
+{{- range .Messages }}
+{{- if eq .Role "user" }}<|im_start|>user
+{{ .Content }}<|im_end|>
+{{ else if eq .Role "assistant" }}<|im_start|>assistant
+{{ .Content }}<|im_end|>
+{{ end }}
+{{- end }}ASSISTANT_PREFIX"""
+'''
 
-def render_modelfile(gguf_name: str, system_prompt: str) -> str:
+
+def render_modelfile(gguf_name: str, system_prompt: str, assistant_prefix: str) -> str:
+    template = _MODELFILE_TEMPLATE.replace("ASSISTANT_PREFIX", assistant_prefix)
     return (
         f"FROM ./{gguf_name}\n"
         f'SYSTEM """{system_prompt}"""\n'
+        f"{template}"
         "PARAMETER num_ctx 4096\n"
         "PARAMETER temperature 0.6\n"
         "PARAMETER stop \"<|im_end|>\"\n"
     )
+
+
+def preflight(llama_cpp: str) -> tuple[str, str]:
+    """Verify llama.cpp is cloned and built before spending time on the merge.
+
+    Returns (convert_script, quant_bin). Raises SystemExit with a clear
+    message if either path is missing.
+    """
+    convert_script = os.path.join(llama_cpp, "convert_hf_to_gguf.py")
+    quant_bin = os.path.join(llama_cpp, "build", "bin", "llama-quantize")
+    missing = [p for p in (convert_script, quant_bin) if not os.path.isfile(p)]
+    if missing:
+        raise SystemExit(
+            "llama.cpp not ready at "
+            f"{llama_cpp!r}, missing: {', '.join(missing)}. "
+            "Clone and build llama.cpp first (see README)."
+        )
+    return convert_script, quant_bin
 
 
 def _merge(model_name, adapter, out_dir):
@@ -37,6 +74,8 @@ def main() -> None:
     ap.add_argument("--llama-cpp", default="../llama.cpp")
     ap.add_argument("--name", default="decria-sec")
     args = ap.parse_args()
+    convert_script, quant_bin = preflight(args.llama_cpp)
+
     cfg = common.load_config(args.config)
     run = cfg["output_dir"]
     adapter = os.path.join(run, "adapter")
@@ -47,18 +86,28 @@ def main() -> None:
     _merge(cfg["model_name"], adapter, merged)
 
     f16 = os.path.join(gguf_dir, f"{args.name}-f16.gguf")
-    subprocess.run([sys.executable, os.path.join(args.llama_cpp, "convert_hf_to_gguf.py"),
+    subprocess.run([sys.executable, convert_script,
                     merged, "--outfile", f16, "--outtype", "f16"], check=True)
-    quant = os.path.join(args.llama_cpp, "build", "bin", "llama-quantize")
     outputs = {}
     for qt in ["Q4_K_M", "Q8_0"]:
         dst = os.path.join(gguf_dir, f"{args.name}-{qt.lower()}.gguf")
-        subprocess.run([quant, f16, dst, qt], check=True)
+        subprocess.run([quant_bin, f16, dst, qt], check=True)
         outputs[qt] = dst
 
-    mf = render_modelfile(os.path.basename(outputs["Q4_K_M"]), common.SYSTEM_PROMPT)
-    open(os.path.join(gguf_dir, "Modelfile"), "w", encoding="utf-8").write(mf)
-    open("Modelfile", "w", encoding="utf-8").write(mf)
+    from transformers import AutoTokenizer
+    tok = AutoTokenizer.from_pretrained(adapter)
+    rendered = tok.apply_chat_template(
+        [{"role": "user", "content": "x"}], add_generation_prompt=True, tokenize=False, enable_thinking=False
+    )
+    assistant_prefix = rendered.split("<|im_end|>\n")[-1]
+    assert assistant_prefix.startswith("<|im_start|>assistant"), \
+        f"unexpected assistant prefix from tokenizer: {assistant_prefix!r}"
+
+    mf = render_modelfile(os.path.basename(outputs["Q4_K_M"]), common.SYSTEM_PROMPT, assistant_prefix)
+    with open(os.path.join(gguf_dir, "Modelfile"), "w", encoding="utf-8") as fh:
+        fh.write(mf)
+    with open("Modelfile", "w", encoding="utf-8") as fh:
+        fh.write(mf)
     print("GGUF written:", outputs)
     print(f"Next: cd {gguf_dir} && ollama create {args.name} -f Modelfile")
 
