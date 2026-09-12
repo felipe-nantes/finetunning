@@ -4,6 +4,7 @@ Run on the desktop:  uv run python scripts/04_eval.py --config configs/1.7b.yaml
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import os
 import random
@@ -40,6 +41,10 @@ def bootstrap_ci(flags: list[int], n_boot: int = 2000, seed: int = 0):
     return acc, means[int(0.025 * n_boot)], means[int(0.975 * n_boot)]
 
 
+def completion_labels(prompt_ids: list[int], completion_ids: list[int]) -> list[int]:
+    return [-100] * len(prompt_ids) + list(completion_ids)
+
+
 def _load_model(model_name, adapter=None):
     bnb = BitsAndBytesConfig(
         load_in_4bit=True, bnb_4bit_quant_type="nf4",
@@ -56,13 +61,22 @@ def _load_model(model_name, adapter=None):
     return tok, model
 
 
+def _letter_token_id(tok, letter: str) -> int:
+    ids = tok(" " + letter, add_special_tokens=False).input_ids
+    if len(ids) != 1:
+        raise ValueError(f"letter {letter!r} is not a single token")
+    return ids[0]
+
+
 @torch.no_grad()
 def _letter_logprob(tok, model, question, choices, letter):
+    letter_id = _letter_token_id(tok, letter)
     prompt = f"{question}\n" + "\n".join(f"{k}. {v}" for k, v in choices.items()) + "\nAnswer:"
     ids = tok(prompt + " " + letter, return_tensors="pt").input_ids.to("cuda")
+    if ids[0, -1].item() != letter_id:
+        raise ValueError("in-context letter token mismatch")
     out = model(ids)
     logprobs = torch.log_softmax(out.logits[0, -2], dim=-1)  # predicts the letter token
-    letter_id = tok(" " + letter, add_special_tokens=False).input_ids[-1]
     return logprobs[letter_id].item()
 
 
@@ -73,6 +87,20 @@ def mcq_accuracy(tok, model, items):
         lp = {L: _letter_logprob(tok, model, it["question"], it["choices"], L) for L in it["choices"]}
         flags.append(int(score_choice(lp) == it["answer"]))
     return flags
+
+
+@torch.no_grad()
+def val_loss(tok, model, rows, max_examples: int = 100) -> float:
+    losses = []
+    for row in rows[:max_examples]:
+        pc = common.to_prompt_completion(row, tok)
+        prompt_ids = tok(pc["prompt"], add_special_tokens=False).input_ids
+        completion_ids = tok(pc["completion"], add_special_tokens=False).input_ids
+        input_ids = torch.tensor([prompt_ids + completion_ids]).to("cuda")
+        labels = torch.tensor([completion_labels(prompt_ids, completion_ids)]).to("cuda")
+        out = model(input_ids=input_ids, labels=labels)
+        losses.append(out.loss.item())
+    return sum(losses) / len(losses)
 
 
 @torch.no_grad()
@@ -88,6 +116,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
     ap.add_argument("--limit-mcq", type=int, default=500)
+    ap.add_argument("--val-file", default="data/processed/val.jsonl")
+    ap.add_argument("--max-val", type=int, default=100)
     args = ap.parse_args()
     cfg = common.load_config(args.config)
     adapter = os.path.join(cfg["output_dir"], "adapter")
@@ -95,23 +125,31 @@ def main() -> None:
     with urllib.request.urlopen(CYBERMETRIC_URL, timeout=60) as r:
         items = parse_cybermetric(json.load(r))[: args.limit_mcq]
 
+    with open(args.val_file, encoding="utf-8") as fh:
+        val_rows = [json.loads(l) for l in fh]
+
     results, samples = {}, []
-    q_prompts = [json.loads(l) for l in open("eval/prompts.jsonl", encoding="utf-8")]
-    r_prompts = [json.loads(l) for l in open("eval/regression_prompts.jsonl", encoding="utf-8")]
+    with open("eval/prompts.jsonl", encoding="utf-8") as fh:
+        q_prompts = [{"set": "qual", **json.loads(l)} for l in fh]
+    with open("eval/regression_prompts.jsonl", encoding="utf-8") as fh:
+        r_prompts = [{"set": "regression", **json.loads(l)} for l in fh]
 
     for label, adapt in [("base", None), ("adapter", adapter)]:
         tok, model = _load_model(cfg["model_name"], adapt)
         flags = mcq_accuracy(tok, model, items)
         acc, lo, hi = bootstrap_ci(flags)
-        results[label] = {"mcq_acc": acc, "ci95": [lo, hi], "n": len(flags)}
+        results[label] = {"mcq_acc": acc, "ci95": [lo, hi], "n": len(flags),
+                          "val_loss": val_loss(tok, model, val_rows, args.max_val)}
         for p in q_prompts + r_prompts:
-            samples.append({"set": "qual" if p in q_prompts else "regression",
+            samples.append({"set": p["set"],
                             "lang": p["lang"], "prompt": p["prompt"],
                             "model": label, "output": _generate(tok, model, p["prompt"])})
         del model
+        gc.collect()
         torch.cuda.empty_cache()
 
-    json.dump(results, open("docs/eval_results.json", "w", encoding="utf-8"), indent=2)
+    with open("docs/eval_results.json", "w", encoding="utf-8") as fh:
+        json.dump(results, fh, indent=2)
     _write_samples_md(samples)
     print(json.dumps(results, indent=2))
 
@@ -125,7 +163,8 @@ def _write_samples_md(samples):
         lines.append(f"## {prompt}\n")
         lines.append(f"**base:**\n\n{outs.get('base','').strip()}\n")
         lines.append(f"**adapter:**\n\n{outs.get('adapter','').strip()}\n\n---\n")
-    open("docs/samples.md", "w", encoding="utf-8").write("\n".join(lines))
+    with open("docs/samples.md", "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines))
 
 
 if __name__ == "__main__":

@@ -32,3 +32,30 @@ def test_frozen_prompt_files_shape():
     assert all({"lang", "prompt"} <= set(p) for p in r)
     assert sum(p["lang"] == "pt" for p in q) == 4
     assert any(p["theme"] == "outofscope" for p in q)
+
+
+def test_completion_labels_masks_prompt():
+    assert ev.completion_labels([1, 2, 3], [4, 5]) == [-100, -100, -100, 4, 5]
+
+
+import pytest
+from types import SimpleNamespace
+
+
+class _FakeTokSingle:
+    def __call__(self, text, add_special_tokens=True):
+        return SimpleNamespace(input_ids=[65])
+
+
+class _FakeTokMulti:
+    def __call__(self, text, add_special_tokens=True):
+        return SimpleNamespace(input_ids=[9, 65])
+
+
+def test_letter_token_id_single_token():
+    assert ev._letter_token_id(_FakeTokSingle(), "A") == 65
+
+
+def test_letter_token_id_multi_token_raises():
+    with pytest.raises(ValueError):
+        ev._letter_token_id(_FakeTokMulti(), "A")
