@@ -1,0 +1,16 @@
+decria-sec dataset — attribution
+
+Published under CC BY-SA 4.0 as a share-alike umbrella.
+
+Public instruction data:
+- Trendyol/Trendyol-Cybersecurity-Instruction-Tuning-Dataset — Apache-2.0
+- AlicanKiraz0/Cybersecurity-Dataset-v1 — Apache-2.0
+
+Synthetic data generated locally (Ollama) from:
+- MITRE ATT&CK (attack-stix-data) — MITRE ATT&CK Terms of Use (attribution required)
+- CWE (cwe.mitre.org) — MITRE CWE Terms of Use (attribution required)
+- OWASP Web Security Testing Guide — CC BY-SA 4.0
+- Tool usage facts: nmap, sqlmap, gobuster, hydra (factual command usage)
+
+Evaluation only, not redistributed:
+- CyberMetric (github.com/cybermetric/CyberMetric) — cited; no redistribution license.
