@@ -44,6 +44,18 @@ def _http_get(url: str, timeout: int = 120) -> bytes:
         return resp.read()
 
 
+def _download_to(url: str, dest: str, timeout: int = 120) -> None:
+    """Fetch url fully into memory first; only then (over)write dest.
+
+    Never opens dest before the fetch succeeds, so a failed/interrupted
+    download cannot leave a truncated 0-byte file that a later
+    os.path.exists idempotency check would mistake for "already done".
+    """
+    data = _http_get(url, timeout=timeout)
+    with open(dest, "wb") as fh:
+        fh.write(data)
+
+
 def fetch_seeds(seeds_dir: str) -> None:
     """Download every licensed seed source into seeds_dir (idempotent)."""
     import shutil
@@ -53,13 +65,11 @@ def fetch_seeds(seeds_dir: str) -> None:
 
     attack = os.path.join(seeds_dir, "enterprise-attack.json")
     if not os.path.exists(attack):
-        with open(attack, "wb") as fh:
-            fh.write(_http_get(ATTACK_URL, timeout=600))
+        _download_to(ATTACK_URL, attack, timeout=600)
 
     nmap = os.path.join(seeds_dir, "tools", "nmap.txt")
     if not os.path.exists(nmap):
-        with open(nmap, "wb") as fh:
-            fh.write(_http_get(NMAP_URL))
+        _download_to(NMAP_URL, nmap)
 
     cwe = os.path.join(seeds_dir, "cwe_top25.json")
     if not os.path.exists(cwe):
@@ -69,8 +79,17 @@ def fetch_seeds(seeds_dir: str) -> None:
             json.dump(weaknesses, fh, indent=2, ensure_ascii=False)
 
     wstg_src = os.path.join(seeds_dir, "wstg_src")
-    if not os.path.isdir(wstg_src):
-        subprocess.run(["git", "clone", "--depth", "1", WSTG_REPO, wstg_src], check=True)
+    if not os.path.isdir(os.path.join(wstg_src, "document")):
+        # A previous interrupted clone may have left a partial wstg_src (or a
+        # stale .partial dir); never treat either as done, and never clone
+        # directly into the final path so a failure can't leave it half-done.
+        partial = wstg_src + ".partial"
+        if os.path.isdir(partial):
+            shutil.rmtree(partial)
+        subprocess.run(["git", "clone", "--depth", "1", WSTG_REPO, partial], check=True)
+        if os.path.isdir(wstg_src):
+            shutil.rmtree(wstg_src)
+        os.rename(partial, wstg_src)
     src_docs = os.path.join(wstg_src, "document", "4-Web_Application_Security_Testing")
     for root, _, files in os.walk(src_docs):
         for f in files:
@@ -93,15 +112,29 @@ def anchored(answer: str, chunk: str, k: int = 2) -> bool:
 
 
 def parse_pairs(raw: str) -> list[dict]:
-    m = re.search(r"\[.*\]", raw, re.DOTALL)
-    if not m:
-        return []
+    data = None
     try:
-        data = json.loads(m.group(0))
+        candidate = json.loads(raw)
+        if isinstance(candidate, list):
+            data = candidate
     except json.JSONDecodeError:
+        pass
+    if data is None:
+        decoder = json.JSONDecoder()
+        for i, ch in enumerate(raw):
+            if ch != "[":
+                continue
+            try:
+                candidate, _ = decoder.raw_decode(raw, i)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, list):
+                data = candidate
+                break
+    if data is None:
         return []
     out = []
-    for d in data if isinstance(data, list) else []:
+    for d in data:
         q, a = (d.get("question") or "").strip(), (d.get("answer") or "").strip()
         if q and a:
             out.append({"question": q, "answer": a})
@@ -236,14 +269,35 @@ def _append_jsonl(path, rows):
             fh.write(json.dumps(r, ensure_ascii=False) + "\n")
 
 
-def _update_manifest(rows, model):
-    path = "data/manifest.json"
-    man = json.load(open(path, encoding="utf-8")) if os.path.exists(path) else {}
+def _update_manifest(rows, model, path="data/manifest.json"):
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as fh:
+            man = json.load(fh)
+    else:
+        man = {}
+
     by_source = {}
     for r in rows:
         by_source[r["source"]] = by_source.get(r["source"], 0) + 1
-    man["synthetic"] = {"model": model, "added": len(rows), "by_source": by_source}
-    json.dump(man, open(path, "w", encoding="utf-8"), indent=2, ensure_ascii=False)
+
+    prev = man.get("synthetic")
+    if prev:
+        added = prev.get("added", 0) + len(rows)
+        merged_by_source = dict(prev.get("by_source", {}))
+        for k, v in by_source.items():
+            merged_by_source[k] = merged_by_source.get(k, 0) + v
+        models = list(prev.get("models", []))
+        prev_model = prev.get("model")
+        if prev_model and prev_model not in models:
+            models.append(prev_model)
+        if model not in models:
+            models.append(model)
+        man["synthetic"] = {"model": model, "models": models, "added": added, "by_source": merged_by_source}
+    else:
+        man["synthetic"] = {"model": model, "models": [model], "added": len(rows), "by_source": by_source}
+
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(man, fh, indent=2, ensure_ascii=False)
 
 
 if __name__ == "__main__":

@@ -1,3 +1,7 @@
+import json
+
+import pytest
+
 from scripts import gen_synthetic as gs
 
 
@@ -42,3 +46,40 @@ def test_parse_cwe_members_and_weaknesses():
 
 def test_parse_cwe_members_empty():
     assert gs.parse_cwe_members({}) == []
+
+
+def test_parse_pairs_ignores_stray_brackets():
+    raw = 'Sure, here are the pairs:\n[{"question":"What is XSS?","answer":"Cross site scripting"}]\nLet me know if you want more examples [like CSRF or SQLi].'
+    pairs = gs.parse_pairs(raw)
+    assert len(pairs) == 1
+    assert pairs[0]["question"] == "What is XSS?"
+
+
+def test_download_to_writes_only_on_success(tmp_path, monkeypatch):
+    dest_ok = tmp_path / "ok.bin"
+    monkeypatch.setattr(gs, "_http_get", lambda url, timeout=120: b"ok")
+    gs._download_to("http://example.invalid/ok", str(dest_ok))
+    assert dest_ok.read_bytes() == b"ok"
+
+    dest_fail = tmp_path / "fail.bin"
+
+    def _boom(url, timeout=120):
+        raise OSError("network down")
+
+    monkeypatch.setattr(gs, "_http_get", _boom)
+    with pytest.raises(OSError):
+        gs._download_to("http://example.invalid/fail", str(dest_fail))
+    assert not dest_fail.exists()
+
+
+def test_update_manifest_accumulates(tmp_path):
+    path = str(tmp_path / "manifest.json")
+    gs._update_manifest(
+        [{"source": "synthetic-attack"}, {"source": "synthetic-attack"}], "model-a", path=path
+    )
+    gs._update_manifest([{"source": "synthetic-cwe"}], "model-b", path=path)
+
+    with open(path, encoding="utf-8") as fh:
+        man = json.load(fh)
+    assert man["synthetic"]["added"] == 3
+    assert man["synthetic"]["by_source"] == {"synthetic-attack": 2, "synthetic-cwe": 1}
