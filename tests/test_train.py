@@ -1,3 +1,5 @@
+import torch
+
 from scripts import train
 
 
@@ -40,12 +42,28 @@ def test_build_sft_config_pascal_safe(tmp_path):
     assert sft.optim == "adamw_torch"
     assert sft.lr_scheduler_type == "cosine"
     assert sft.gradient_checkpointing is True
+    assert sft.per_device_eval_batch_size == 1
 
 
 def test_last_checkpoint_ignores_non_numeric_entries(tmp_path):
     (tmp_path / "checkpoint-10").mkdir()
-    (tmp_path / "checkpoint-200").mkdir()
+    (tmp_path / "checkpoint-10" / "trainer_state.json").write_text("{}")
+    (tmp_path / "checkpoint-200").mkdir()  # partial save: no trainer_state.json
     (tmp_path / "checkpoint-notes.txt").write_text("not a checkpoint dir")
     (tmp_path / "checkpoint-final").mkdir()
-    assert train._last_checkpoint(str(tmp_path)).endswith("checkpoint-200")
+    assert train._last_checkpoint(str(tmp_path)).endswith("checkpoint-10")
     assert train._last_checkpoint(str(tmp_path / "missing")) is None
+
+
+def test_force_fp32_trainable_casts_only_trainable_bf16_params():
+    model = torch.nn.Sequential(torch.nn.Linear(4, 4), torch.nn.Linear(4, 2))
+    model = model.to(torch.bfloat16)
+    model[1].requires_grad_(False)
+
+    n_cast = train.force_fp32_trainable(model)
+
+    assert n_cast == 2  # layer 0 weight + bias
+    assert model[0].weight.dtype == torch.float32
+    assert model[0].bias.dtype == torch.float32
+    assert model[1].weight.dtype == torch.bfloat16
+    assert model[1].bias.dtype == torch.bfloat16

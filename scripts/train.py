@@ -5,11 +5,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import torch
 from datasets import load_dataset
 from peft import LoraConfig, prepare_model_for_kbit_training
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from transformers.trainer_utils import get_last_checkpoint
 from trl import SFTTrainer, SFTConfig
 
 from scripts import common
@@ -51,9 +51,28 @@ def build_sft_config(cfg: dict) -> SFTConfig:
         save_total_limit=3,
         eval_strategy="steps",
         eval_steps=cfg["eval_steps"],
+        per_device_eval_batch_size=1,
         report_to=["tensorboard"],
         seed=cfg["seed"],
     )
+
+
+def force_fp32_trainable(model) -> int:
+    """Cast every trainable parameter back to fp32 (TRL casts them to bf16 for 4-bit models).
+
+    TRL 1.13's SFTTrainer.__init__ unconditionally casts trainable params of a
+    quantized model to bf16 (see trl/trainer/sft_trainer.py), regardless of the
+    fp16/bf16 flags in SFTConfig. The GTX 1060 (Pascal, sm_61) has no native
+    bf16 support, so this must be undone right after the trainer is built.
+
+    Returns the number of parameters cast.
+    """
+    n = 0
+    for p in model.parameters():
+        if p.requires_grad and p.dtype != torch.float32:
+            p.data = p.data.to(torch.float32)
+            n += 1
+    return n
 
 
 def main() -> None:
@@ -90,6 +109,10 @@ def main() -> None:
         model=model, args=sft, train_dataset=train_ds, eval_dataset=val_ds,
         processing_class=tok, peft_config=build_lora_config(cfg),
     )
+    n_cast = force_fp32_trainable(trainer.model)
+    bad = [name for name, p in trainer.model.named_parameters() if p.requires_grad and p.dtype != torch.float32]
+    assert not bad, f"non-fp32 trainable params: {bad[:5]}"
+    print(f"trainable params cast back to fp32: {n_cast}")
     ckpt = _last_checkpoint(cfg["output_dir"])
     trainer.train(resume_from_checkpoint=ckpt)
     trainer.save_model(os.path.join(cfg["output_dir"], "adapter"))
@@ -97,10 +120,28 @@ def main() -> None:
     print("saved adapter to", os.path.join(cfg["output_dir"], "adapter"))
 
 
+_CHECKPOINT_RE = re.compile(r"^checkpoint-(\d+)$")
+
+
 def _last_checkpoint(output_dir: str):
+    """Return the newest checkpoint-N dir that actually finished saving.
+
+    A power cut mid-save can leave a partial checkpoint-N directory (no
+    trainer_state.json). Resuming from that directory would fail, so we walk
+    candidates newest-first and return the first one that looks complete.
+    """
     if not os.path.isdir(output_dir):
         return None
-    return get_last_checkpoint(output_dir)
+    candidates = []
+    for name in os.listdir(output_dir):
+        m = _CHECKPOINT_RE.match(name)
+        if m and os.path.isdir(os.path.join(output_dir, name)):
+            candidates.append((int(m.group(1)), os.path.join(output_dir, name)))
+    candidates.sort(key=lambda pair: pair[0], reverse=True)
+    for _, path in candidates:
+        if os.path.isfile(os.path.join(path, "trainer_state.json")):
+            return path
+    return None
 
 
 if __name__ == "__main__":

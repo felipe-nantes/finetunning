@@ -14,4 +14,3 @@ save_steps: 50
 eval_steps: 50
 logging_steps: 5
 seed: 42
-enable_thinking: false

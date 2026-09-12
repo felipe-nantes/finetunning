@@ -10,8 +10,7 @@ max_train_samples: -1
 lora_r: 16
 lora_alpha: 32
 lora_dropout: 0.05
-save_steps: 200
+save_steps: 25
 eval_steps: 200
 logging_steps: 10
 seed: 42
-enable_thinking: false
