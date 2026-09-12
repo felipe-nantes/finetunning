@@ -56,7 +56,7 @@ no Windows. Por isso **no desktop, use sempre o terminal Ubuntu do WSL2**, nunca
 curl -LsSf https://astral.sh/uv/install.sh | sh        # instala uv (Linux/WSL)
 git clone -b feat/pipeline https://github.com/felipe-nantes/finetunning.git && cd finetunning
 uv sync                                               # Python 3.11 + deps pinadas + torch
-uv run pytest                                         # 29 testes, CPU, ~10 s
+uv run pytest                                         # 46 testes, CPU, ~10 s
 ```
 
 No Windows, se o `uv` falhar ao instalar o Python 3.11 com "Missing expected target directory",
@@ -75,6 +75,11 @@ uv run python scripts/00_check_env.py                 # precisa imprimir PASS
 uv run python scripts/01_build_dataset.py             # ~3k exemplos publicos -> data/processed/
 ```
 
+> **Ollama e WSL2.** Instale o Ollama **dentro do WSL2** (`curl -fsSL https://ollama.com/install.sh | sh`)
+> para que `localhost:11434` funcione sem configuração extra. Se em vez disso o Ollama rodar no
+> Windows, suba-o com `OLLAMA_HOST=0.0.0.0` e, no WSL2, passe `--ollama-url http://<IP do Windows>:11434`
+> (ou defina a variável de ambiente `OLLAMA_HOST` com o mesmo valor).
+
 ```bash
 ollama pull qwen2.5:7b-instruct-q4_K_M                # gerador local (4.7 GB, cabe na 1060)
 uv run python scripts/02_gen_synthetic.py --fetch-seeds
@@ -86,6 +91,12 @@ uv run python scripts/03_train.py --config configs/smoke.yaml   # Qwen3-0.6B, 10
 uv run python scripts/03_train.py --config configs/1.7b.yaml    # run real, ~8-11 h estimadas
 ```
 
+> **Checklist do smoke:** no log de treino, logo antes do primeiro passo, precisa aparecer
+> `trainable params cast back to fp32: N` com `N > 0` e nenhum parâmetro treinável em bf16 — é
+> o `force_fp32_trainable` desfazendo o cast pra bf16 que o `SFTTrainer` do TRL faz em modelos
+> quantizados. Sem essa linha (ou com `N == 0`), o treino está rodando fora do fp32 que a 1060
+> (Pascal) exige.
+
 ```bash
 uv run python scripts/04_eval.py --config configs/1.7b.yaml     # base vs adapter -> docs/
 ```
@@ -96,6 +107,7 @@ cmake -S ../llama.cpp -B ../llama.cpp/build && cmake --build ../llama.cpp/build 
 uv pip install -r ../llama.cpp/requirements.txt
 uv run python scripts/05_merge_export.py --config configs/1.7b.yaml
 cd outputs/qwen3-1.7b/gguf && ollama create decria-sec -f Modelfile && ollama run decria-sec "Explique IDOR de forma autorizada"
+ollama show decria-sec --modelfile     # confirma que o TEMPLATE termina no prefixo do assistant
 ```
 
 ```bash
@@ -154,6 +166,22 @@ visível é a qualidade das respostas abertas e a recusa consistente de pedidos 
 - **Plano B documentado, não escondido:** se a 1060 ficar abaixo de ~40 tok/s no gate, o
   mesmo dataset e os mesmos scripts 04–06 rodam com treino no Colab/Kaggle T4 + Unsloth.
 
+## Follow-ups antes do run de 1.7B
+
+Itens reais, adiados deliberadamente na revisão final (não bloqueiam esta branch, mas devem
+ser resolvidos antes do run completo de produção):
+
+- Filtro de comprimento da base pública por tokens vs o `max_length` de 768 usado no treino
+  (hoje `response_len_ok` conta tokens do próprio tokenizer, mas o corte não está alinhado
+  1:1 com o truncamento aplicado em treino/eval).
+- Flush incremental e resume na geração sintética (`02_gen_synthetic.py` só grava train/val
+  no final do `--target`; uma queda de energia no meio da noite perde a sessão inteira).
+- ~100–150 pares fora-de-escopo → recusa (EN/PT) na base de treino, para o modelo aprender a
+  recusar de forma consistente (hoje só a avaliação testa isso; o treino não tem exemplos
+  dedicados de recusa).
+- Model card completo no Hugging Face Hub: fontes, licenças, val loss, IC 95%, amostras
+  qualitativas e limitações conhecidas.
+
 ## Estrutura
 
 ```
@@ -161,7 +189,8 @@ configs/            smoke.yaml, 1.7b.yaml, 4b.yaml
 scripts/            common.py + 7 modulos + 7 atalhos numerados
 tests/              pytest, tudo roda em CPU
 eval/               12 prompts fixos + 5 de regressao (congelados)
-data/processed/     train/val jsonl (vai pro Hub, nao pro git) + manifest.json
+data/processed/     train/val jsonl (vai pro Hub, nao pro git)
+data/manifest.json  manifest cumulativo: fontes publicas + sintetico, contagens train/val
 docs/               spec, plano, eval_results.json, samples.md
 outputs/            checkpoints, merges, gguf (fora do git)
 NOTICE              atribuicao de cada fonte de dados

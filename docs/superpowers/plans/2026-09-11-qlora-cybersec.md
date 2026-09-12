@@ -10,9 +10,10 @@
 
 ## Execution status (handoff)
 
-- 2026-09-11, laptop: Task 1 done (uv project, `uv.lock`, Python 3.11 managed by uv, torch per-platform index). Task 3 file written and checked against the plan; its desktop run (Step 2) is pending. Tasks 2, 4–10 not started.
-- Resume on the desktop from **Task 2** (`common.py`), then 4–9. Implementers must not commit; the human commits per task with their own git identity and no AI co-author trailer.
-- Git identity for every commit: the repo owner's global `user.name`/`user.email`. Commit messages: short, natural Portuguese. Ignore the `Co-Authored-By` lines in the task steps below.
+- 2026-09-12, laptop: **Tasks 1–10 implemented, each task-reviewed with fix rounds, plus a final whole-branch review and its fix wave.** 40+ pytest tests green on CPU. Everything that needs the GPU, Ollama, llama.cpp or a Hugging Face account is still pending and lives in the README runbook: `00_check_env` gate, full `01_build_dataset`, `02_gen_synthetic --fetch-seeds` + generation, smoke + 1.7B training, `04_eval`, `05_merge_export` + `ollama create`, `06_push_hub`.
+- Deviations adopted during execution (all reviewed): eval module is `scripts/eval_model.py`; `warmup_steps=0.03` replaces `warmup_ratio` (transformers 5.x); `build_sft_config` extracted and tested; `fetch_seeds` + CWE parsers added to `gen_synthetic.py`; `force_fp32_trainable` added to `train.py` because TRL 1.13 casts trainable params of 4-bit models to bf16 inside `SFTTrainer.__init__` regardless of `bf16=False`; Modelfile carries an explicit `TEMPLATE` derived from the tokenizer's generation prefix; `save_steps` lowered to 25 (~30 min on the 1060).
+- **Follow-ups before the 1.7B run** (parked from the final review, real but not merge-blocking): (a) length filter in tokens against `max_length` 768 instead of 80–1500 words, with a truncation count in the manifest; (b) incremental flush + resume in `02_gen_synthetic` (rows are held in memory for the whole overnight run); (c) ~100–150 out-of-scope → refusal/redirect pairs (EN/PT, `source: synthetic-oos`) so the refusal behavior is trained, not inherited; (d) full model card per spec §10 (sources + licenses, val loss, CI, samples, limitations, `library_name: peft`).
+- Git identity for every commit: the repo owner's global `user.name`/`user.email`. Commit messages: short, natural Portuguese. Ignore the `Co-Authored-By` lines in the task steps below. Implementers never commit; the controller commits per task.
 
 ## Global Constraints
 

@@ -1,7 +1,7 @@
 # Design: QLoRA de um assistente de cibersegurança em GTX 1060 6GB
 
 **Data:** 2026-09-11
-**Status:** aprovado em brainstorming, aguardando revisão da spec escrita
+**Status:** aprovado; pipeline implementado e revisado no laptop (2026-09-12); runs de GPU pendentes no desktop
 **Projeto:** `finetunning_decria`
 
 ## 1. Objetivo
@@ -36,6 +36,7 @@ Resultado esperado:
 - PyTorch: as wheels **`cu126` x86_64 (2.14.x)** embarcam SASS para `sm_50;sm_60;sm_70;sm_75;sm_80;sm_86;sm_90` (verificado no `build_env_setup.py` da tag). O cubin `sm_60` roda no `sm_61` da GTX 1060 por compatibilidade de minor version (X.z executa em X.w com w ≥ z). As wheels **CUDA 13.x removeram `sm_50/60/70`** e por isso **não rodam** na 1060. **Pinar uma build `cu126`** (fallback `cu128`, que também tem `sm_60`; nunca `cu130+`). O gate `00_check_env` confirma empiricamente, não confia só na lista.
 - bitsandbytes: a documentação oficial (até 0.50.x) lista **NF4/FP4 para Compute Capability 6.0+**, citando explicitamente a série GTX 10x0 (Pascal). Ou seja, Pascal **não** foi removido. **Pinar uma versão recente conhecida** (ex.: 0.48–0.50) e validar no smoke test, em vez de assumir que quebrou. LLM.int8() (8-bit) exige 7.5+, mas não é usado aqui.
 - Modelos de 7B não cabem: NF4 ≈ 4GB + embeddings/lm_head fp32 + ativações estouram 6GB.
+- **Armadilha descoberta na implementação:** a TRL 1.13 converte todos os parâmetros treináveis de um modelo 4-bit para **bf16** dentro de `SFTTrainer.__init__`, mesmo com `bf16=False`. Na Pascal isso significaria LoRA e otimizador em bf16. O `03_train.py` força os parâmetros treináveis de volta para fp32 depois de construir o trainer e aborta se sobrar algum não-fp32; o log do smoke deve mostrar `trainable params cast back to fp32: N`.
 
 ### Idioma
 
