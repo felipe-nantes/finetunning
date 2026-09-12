@@ -54,7 +54,7 @@ no Windows. Por isso **no desktop, use sempre o terminal Ubuntu do WSL2**, nunca
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh        # instala uv (Linux/WSL)
-git clone -b feat/pipeline https://github.com/felipe-nantes/finetunning.git && cd finetunning
+git clone https://github.com/felipe-nantes/finetunning.git && cd finetunning
 uv sync                                               # Python 3.11 + deps pinadas + torch
 uv run pytest                                         # 46 testes, CPU, ~10 s
 ```
