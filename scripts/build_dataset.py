@@ -18,7 +18,7 @@ SOURCES = [
 def normalize_row(raw: dict, source: str) -> dict | None:
     user = (raw.get("user") or "").strip()
     assistant = (raw.get("assistant") or "").strip()
-    system = (raw.get("system") or common.SYSTEM_PROMPT).strip()
+    system = common.SYSTEM_PROMPT
     if not user or not assistant:
         return None
     if common.detect_lang(user) != "en":
@@ -65,6 +65,7 @@ def stratified_cap(rows: list[dict], cap: int, key: str = "theme", seed: int = 4
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out-dir", default="data/processed")
+    ap.add_argument("--manifest", default="data/manifest.json")
     ap.add_argument("--cap", type=int, default=3000)
     ap.add_argument("--val-frac", type=float, default=0.05)
     ap.add_argument("--limit", type=int, default=-1, help="debug: cap raw rows per source")
@@ -97,13 +98,16 @@ def main() -> None:
     rng.shuffle(all_rows)
     n_val = max(1, int(len(all_rows) * args.val_frac))
     val, train = all_rows[:n_val], all_rows[n_val:]
+    if len(train) == 0:
+        raise SystemExit("not enough rows to split; increase --cap/--limit")
     manifest["train"] = len(train)
     manifest["val"] = len(val)
     manifest["theme_counts"] = _counts(all_rows)
 
     _write_jsonl(os.path.join(args.out_dir, "train.jsonl"), train)
     _write_jsonl(os.path.join(args.out_dir, "val.jsonl"), val)
-    with open("data/manifest.json", "w", encoding="utf-8") as fh:
+    os.makedirs(os.path.dirname(args.manifest) or ".", exist_ok=True)
+    with open(args.manifest, "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=2, ensure_ascii=False)
     print(json.dumps(manifest, indent=2, ensure_ascii=False))
 

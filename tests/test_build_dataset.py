@@ -1,4 +1,5 @@
 from scripts import build_dataset as bd  # module aliased; see note in Step 3
+from scripts import common
 
 
 def test_normalize_row_maps_schema():
@@ -6,6 +7,7 @@ def test_normalize_row_maps_schema():
            "assistant": "word " * 120}
     row = bd.normalize_row(raw, "trendyol")
     assert row["messages"][0]["role"] == "system"
+    assert row["messages"][0]["content"] == common.SYSTEM_PROMPT
     assert row["messages"][1]["content"].startswith("How to enumerate")
     assert row["messages"][2]["role"] == "assistant"
     assert row["source"] == "trendyol"
@@ -14,10 +16,17 @@ def test_normalize_row_maps_schema():
 
 
 def test_normalize_row_rejects_short_and_refusal():
-    assert bd.normalize_row({"system": "S", "user": "u", "assistant": "no"}, "x") is None
+    user = "How do I enumerate open ports on a target with nmap during an authorized test?"
+    # Short response case: English, but too short
+    assert bd.normalize_row({"system": "S", "user": user, "assistant": "Use nmap with a version scan."}, "x") is None
+    # Refusal case: English, long enough, but contains refusal phrase
     assert bd.normalize_row(
-        {"system": "S", "user": "u " * 50, "assistant": "I cannot help with that. " * 20}, "x"
+        {"system": "S", "user": user, "assistant": "I cannot help with that request because it may be misused. " * 15}, "x"
     ) is None
+    # Positive control: English, long enough, no refusal
+    assert bd.normalize_row(
+        {"system": "S", "user": user, "assistant": "Run nmap with service detection and save the output. " * 20}, "x"
+    ) is not None
 
 
 def test_stratified_cap_balances_themes():
