@@ -38,8 +38,8 @@ Authorized security testing, study, CTF. **Not** for unauthorized access or
 generating functional malware. Out-of-scope requests are refused.
 
 ## Training
-NF4 4-bit + LoRA (r=16), fp32 compute, seq {meta.get('max_length', 768)},
-effective batch 16, 2 epochs. See the GitHub repo for the full reproducible pipeline.
+NF4 4-bit + LoRA (r={meta.get('lora_r', 16)}), fp32 compute, seq {meta.get('max_length', 768)},
+effective batch {meta.get('effective_batch', 16)}, {meta.get('epochs', 2)} epochs. See the GitHub repo for the full reproducible pipeline.
 """
 
 
@@ -79,12 +79,17 @@ def main() -> None:
     args = ap.parse_args()
     cfg = common.load_config(args.config)
     run = cfg["output_dir"]
-    ev = json.load(open("docs/eval_results.json", encoding="utf-8"))
-    manifest = json.load(open("data/manifest.json", encoding="utf-8"))
+    with open("docs/eval_results.json", encoding="utf-8") as fh:
+        ev = json.load(fh)
+    with open("data/manifest.json", encoding="utf-8") as fh:
+        manifest = json.load(fh)
 
     meta = {"model_name": cfg["model_name"], "base_license": "apache-2.0",
             "hours": args.hours, "gpu": "GTX 1060 6GB", "eval": ev,
-            "max_length": cfg["max_length"]}
+            "max_length": cfg["max_length"],
+            "lora_r": cfg["lora_r"],
+            "effective_batch": cfg["per_device_train_batch_size"] * cfg["gradient_accumulation_steps"],
+            "epochs": cfg["num_train_epochs"]}
 
     from huggingface_hub import HfApi
     api = HfApi()
@@ -94,7 +99,8 @@ def main() -> None:
     data_repo = f"{args.user}/decria-sec-dataset"
 
     api.create_repo(lora_repo, exist_ok=True)
-    open(os.path.join(run, "adapter", "README.md"), "w", encoding="utf-8").write(render_model_card(meta))
+    with open(os.path.join(run, "adapter", "README.md"), "w", encoding="utf-8") as fh:
+        fh.write(render_model_card(meta))
     api.upload_folder(folder_path=os.path.join(run, "adapter"), repo_id=lora_repo)
 
     api.create_repo(gguf_repo, exist_ok=True)
@@ -102,7 +108,8 @@ def main() -> None:
                       allow_patterns=["*.gguf", "Modelfile"])
 
     api.create_repo(data_repo, repo_type="dataset", exist_ok=True)
-    open("data/processed/README.md", "w", encoding="utf-8").write(render_dataset_card(manifest))
+    with open("data/processed/README.md", "w", encoding="utf-8") as fh:
+        fh.write(render_dataset_card(manifest))
     api.upload_folder(folder_path="data/processed", repo_id=data_repo, repo_type="dataset",
                       allow_patterns=["*.jsonl", "README.md"])
     api.upload_file(path_or_fileobj="NOTICE", path_in_repo="NOTICE", repo_id=data_repo, repo_type="dataset")
