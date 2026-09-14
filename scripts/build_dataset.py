@@ -99,6 +99,8 @@ def main() -> None:
     ap.add_argument("--config", default="configs/0.6b.yaml",
                     help="run config: supplies the tokenizer and the max_length the filter aligns to")
     ap.add_argument("--min-completion-tokens", type=int, default=64)
+    ap.add_argument("--no-oos", action="store_true",
+                    help="skip the curated out-of-scope refusal pairs")
     args = ap.parse_args()
 
     from datasets import load_dataset
@@ -132,6 +134,19 @@ def main() -> None:
     manifest["after_dedup"] = len(all_rows)
 
     all_rows = stratified_cap(all_rows, args.cap, seed=args.seed)
+
+    # Curated out-of-scope -> refusal pairs, added AFTER dedup/cap on purpose:
+    # they share a refusal template, so MinHash would collapse them into a
+    # couple of survivors. We want every scenario in, so they bypass dedup and
+    # ride along into the shuffle/split like any other row.
+    if not args.no_oos:
+        from scripts import oos_pairs
+        oos = oos_pairs.build_oos_rows()
+        all_rows.extend(oos)
+        manifest["oos_refusals"] = {"added": len(oos),
+                                    "en": sum(r["lang"] == "en" for r in oos),
+                                    "pt": sum(r["lang"] == "pt" for r in oos)}
+
     rng = random.Random(args.seed)
     rng.shuffle(all_rows)
     n_val = max(1, int(len(all_rows) * args.val_frac))
