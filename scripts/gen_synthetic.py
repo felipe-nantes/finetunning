@@ -272,7 +272,16 @@ def _flush(fh, obj) -> None:
     os.fsync(fh.fileno())
 
 
-def finalize(rows, out_dir, model, rng, val_frac, raw_path, done_path) -> int:
+def default_manifest_path(out_dir: str) -> str:
+    """Manifest that goes with an out-dir: sibling of the dir, e.g.
+    data/processed -> data/manifest.json. Deriving it (instead of always
+    writing data/manifest.json) keeps a run with a custom --out-dir from
+    clobbering the real manifest's counts."""
+    parent = os.path.dirname(os.path.abspath(out_dir.rstrip("/")))
+    return os.path.join(parent, "manifest.json")
+
+
+def finalize(rows, out_dir, model, rng, val_frac, raw_path, done_path, manifest_path=None) -> int:
     """Dedup the flushed rows, split, append to train/val, then clear the session."""
     rows = common.exact_dedup(rows)
     rows = common.minhash_dedup(rows, threshold=0.8)
@@ -283,7 +292,7 @@ def finalize(rows, out_dir, model, rng, val_frac, raw_path, done_path) -> int:
     n_val = max(1, int(len(rows) * val_frac))
     _append_jsonl(os.path.join(out_dir, "val.jsonl"), rows[:n_val])
     _append_jsonl(os.path.join(out_dir, "train.jsonl"), rows[n_val:])
-    _update_manifest(rows, model, n_val=n_val)
+    _update_manifest(rows, model, path=manifest_path or default_manifest_path(out_dir), n_val=n_val)
     for path in (raw_path, done_path):
         if os.path.exists(path):
             os.remove(path)
@@ -317,6 +326,8 @@ def main() -> None:
                     help="merge whatever a previous session already flushed, without generating more")
     ap.add_argument("--fresh", action="store_true",
                     help="discard the pending session (raw + done log) and start over")
+    ap.add_argument("--manifest", default=None,
+                    help="manifest to update; default is the sibling of --out-dir")
     args = ap.parse_args()
 
     if args.fetch_seeds:
@@ -324,6 +335,7 @@ def main() -> None:
         print(f"seeds ready in {args.seeds_dir}")
         return
 
+    manifest_path = args.manifest or default_manifest_path(args.out_dir)
     os.makedirs(args.out_dir, exist_ok=True)
     raw_path = os.path.join(args.out_dir, "synthetic_raw.jsonl")
     done_path = os.path.join(args.out_dir, "synthetic_done.txt")
@@ -340,7 +352,7 @@ def main() -> None:
         print(f"resuming: {len(rows)} rows already flushed, {len(done)} chunks already done")
 
     if args.finalize:
-        finalize(rows, args.out_dir, args.model, shuffle_rng, args.val_frac, raw_path, done_path)
+        finalize(rows, args.out_dir, args.model, shuffle_rng, args.val_frac, raw_path, done_path, manifest_path)
         return
 
     url = resolve_ollama_url(args.ollama_url, os.environ.get("OLLAMA_HOST"))

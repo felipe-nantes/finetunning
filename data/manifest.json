@@ -1,0 +1,47 @@
+{
+  "sources": [
+    {
+      "repo": "Trendyol/Trendyol-Cybersecurity-Instruction-Tuning-Dataset",
+      "source": "trendyol",
+      "license": "apache-2.0",
+      "raw": 53201,
+      "kept": 52382
+    },
+    {
+      "repo": "AlicanKiraz0/Cybersecurity-Dataset-v1",
+      "source": "alicankiraz0",
+      "license": "apache-2.0",
+      "raw": 2411,
+      "kept": 2390
+    }
+  ],
+  "cap": 3000,
+  "seed": 42,
+  "length_filter": {
+    "seen": 54772,
+    "over_max_length": 957,
+    "under_min_completion": 0,
+    "max_length": 768,
+    "min_completion_tokens": 64,
+    "kept": 53815,
+    "tokenizer": "Qwen/Qwen3-0.6B"
+  },
+  "deduped_from": 53815,
+  "after_dedup": 51859,
+  "oos_refusals": {
+    "added": 98,
+    "en": 49,
+    "pt": 49
+  },
+  "train": 2944,
+  "val": 154,
+  "theme_counts": {
+    "web": 485,
+    "other": 484,
+    "recon": 485,
+    "privesc": 484,
+    "defense": 583,
+    "network": 485,
+    "cve": 92
+  }
+}

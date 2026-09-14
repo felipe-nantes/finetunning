@@ -232,3 +232,28 @@ def test_main_interrupted_run_keeps_rows_and_resumes(monkeypatch, tmp_path):
     gs.main()
     # the two completed chunks were not re-sent
     assert seen == before
+
+
+def test_default_manifest_path_is_sibling_of_out_dir():
+    assert gs.default_manifest_path("data/processed").endswith("/data/manifest.json")
+    assert gs.default_manifest_path("data/processed/").endswith("/data/manifest.json")
+    # a custom out-dir gets its own manifest, never data/manifest.json
+    assert gs.default_manifest_path("/tmp/scratch/gensmoke").endswith("/tmp/scratch/manifest.json")
+
+
+def test_finalize_writes_manifest_beside_custom_out_dir(tmp_path):
+    out = tmp_path / "processed"
+    out.mkdir()
+    raw = out / "synthetic_raw.jsonl"
+    done = out / "synthetic_done.txt"
+    raw.write_text("", encoding="utf-8")
+    done.write_text("", encoding="utf-8")
+    rows = [{"messages": [{"role": "user", "content": f"q{i}"}], "source": "synthetic-attack"}
+            for i in range(4)]
+    import random
+    gs.finalize(rows, str(out), "m", random.Random(0), 0.25, str(raw), str(done))
+    # manifest landed beside the out-dir, not at the repo's data/manifest.json
+    assert (tmp_path / "manifest.json").exists()
+    man = json.loads((tmp_path / "manifest.json").read_text())
+    assert man["synthetic"]["added"] == 4
+    assert not raw.exists() and not done.exists()   # session cleared
