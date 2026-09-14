@@ -33,8 +33,8 @@
     "en": 49,
     "pt": 49
   },
-  "train": 2944,
-  "val": 154,
+  "train": 3032,
+  "val": 158,
   "theme_counts": {
     "web": 485,
     "other": 484,
@@ -43,5 +43,16 @@
     "defense": 583,
     "network": 485,
     "cve": 92
+  },
+  "synthetic": {
+    "model": "qwen2.5:3b-instruct-q4_K_M",
+    "models": [
+      "qwen2.5:3b-instruct-q4_K_M"
+    ],
+    "added": 92,
+    "by_source": {
+      "synthetic-wstg": 29,
+      "synthetic-attack": 63
+    }
   }
 }
