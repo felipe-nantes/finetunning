@@ -152,3 +152,83 @@ def test_main_raises_after_max_consecutive_ollama_failures(monkeypatch, tmp_path
 
     with pytest.raises(SystemExit, match="consecutive Ollama failures"):
         gs.main()
+
+
+def test_chunk_key_is_stable_and_source_scoped():
+    assert gs.chunk_key("a", "text") == gs.chunk_key("a", "text")
+    assert gs.chunk_key("a", "text") != gs.chunk_key("b", "text")
+
+
+def test_pick_lang_is_deterministic_and_respects_fraction():
+    keys = [gs.chunk_key("s", f"chunk {i}") for i in range(400)]
+    langs = [gs.pick_lang(k, 0.30) for k in keys]
+    assert langs == [gs.pick_lang(k, 0.30) for k in keys]  # stable across resumes
+    pt = langs.count("pt") / len(langs)
+    assert 0.2 < pt < 0.4
+    assert all(gs.pick_lang(k, 0.0) == "en" for k in keys)
+    assert all(gs.pick_lang(k, 1.0) == "pt" for k in keys)
+
+
+def test_load_raw_rows_drops_torn_last_line(tmp_path):
+    p = tmp_path / "synthetic_raw.jsonl"
+    p.write_text('{"messages": [], "source": "a"}\n{"messages": [], "sou', encoding="utf-8")
+    rows = gs.load_raw_rows(str(p))
+    assert len(rows) == 1
+    assert gs.load_raw_rows(str(tmp_path / "missing.jsonl")) == []
+
+
+def test_main_resumes_and_skips_done_chunks(monkeypatch, tmp_path):
+    fake_units = [("src1", "alpha beta gamma delta"), ("src2", "epsilon zeta eta theta")]
+    monkeypatch.setattr(gs, "_load_seed_texts", lambda seeds_dir: fake_units)
+    calls = []
+
+    def _fake_chat(model, prompt, url, timeout=180):
+        calls.append(prompt)
+        # answer echoes chunk terms so `anchored` passes, and is long enough
+        terms = prompt.split("TEXT:\n")[-1].split("TEXTO:\n")[-1]
+        return json.dumps([{"question": "Q?", "answer": (terms + " ") * 40}])
+
+    monkeypatch.setattr(gs, "ollama_chat", _fake_chat)
+    monkeypatch.setattr(gs, "_update_manifest", lambda *a, **k: None)
+
+    argv = ["gen_synthetic.py", "--out-dir", str(tmp_path), "--target", "1"]
+    monkeypatch.setattr(sys, "argv", argv)
+    gs.main()
+    first_calls = len(calls)
+    assert first_calls == 1
+    assert (tmp_path / "train.jsonl").exists() or (tmp_path / "val.jsonl").exists()
+    # the session files are cleared once merged
+    assert not (tmp_path / "synthetic_raw.jsonl").exists()
+    assert not (tmp_path / "synthetic_done.txt").exists()
+
+
+def test_main_interrupted_run_keeps_rows_and_resumes(monkeypatch, tmp_path):
+    fake_units = [("src1", " ".join(f"w{i}" for i in range(2000)))]
+    monkeypatch.setattr(gs, "_load_seed_texts", lambda seeds_dir: fake_units)
+    monkeypatch.setattr(gs, "_update_manifest", lambda *a, **k: None)
+    seen = []
+
+    def _chat_then_die(model, prompt, url, timeout=180):
+        terms = prompt.split("TEXT:\n")[-1].split("TEXTO:\n")[-1]
+        seen.append(terms[:20])
+        if len(seen) == 3:
+            raise KeyboardInterrupt("power cut")
+        return json.dumps([{"question": "Q?", "answer": (terms[:200] + " ") * 10}])
+
+    monkeypatch.setattr(gs, "ollama_chat", _chat_then_die)
+    monkeypatch.setattr(sys, "argv", ["gen_synthetic.py", "--out-dir", str(tmp_path), "--target", "99"])
+    with pytest.raises(KeyboardInterrupt):
+        gs.main()
+
+    raw = tmp_path / "synthetic_raw.jsonl"
+    done = tmp_path / "synthetic_done.txt"
+    assert len(gs.load_raw_rows(str(raw))) >= 2      # flushed before the crash
+    assert len(gs.load_done_keys(str(done))) == 2    # the crashed chunk is not marked done
+
+    before = list(seen)
+    monkeypatch.setattr(gs, "ollama_chat",
+                        lambda model, prompt, url, timeout=180: json.dumps([]))
+    monkeypatch.setattr(sys, "argv", ["gen_synthetic.py", "--out-dir", str(tmp_path), "--target", "99"])
+    gs.main()
+    # the two completed chunks were not re-sent
+    assert seen == before

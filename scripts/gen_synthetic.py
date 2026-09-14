@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -230,6 +231,76 @@ def _load_seed_texts(seeds_dir: str) -> list[tuple[str, str]]:
     return units
 
 
+def chunk_key(source_tag: str, chunk: str) -> str:
+    """Stable id for one (source, chunk) generation unit, for the resume log."""
+    return hashlib.sha256(f"{source_tag}\x00{chunk}".encode("utf-8")).hexdigest()[:16]
+
+
+def load_done_keys(path: str) -> set:
+    """Keys of chunks already sent to Ollama in a previous (interrupted) session."""
+    if not os.path.exists(path):
+        return set()
+    with open(path, encoding="utf-8") as fh:
+        return {line.strip() for line in fh if line.strip()}
+
+
+def load_raw_rows(path: str) -> list:
+    """Rows already generated and flushed to disk. Skips a torn last line."""
+    if not os.path.exists(path):
+        return []
+    rows = []
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                print(f"warning: dropping truncated last line of {path}")
+    return rows
+
+
+def _flush(fh, obj) -> None:
+    """Append one JSON line and push it to the OS immediately.
+
+    The whole point of the raw file is surviving a power cut mid-run, so every
+    row has to leave the process buffer as soon as it exists.
+    """
+    fh.write(json.dumps(obj, ensure_ascii=False) + "\n")
+    fh.flush()
+    os.fsync(fh.fileno())
+
+
+def finalize(rows, out_dir, model, rng, val_frac, raw_path, done_path) -> int:
+    """Dedup the flushed rows, split, append to train/val, then clear the session."""
+    rows = common.exact_dedup(rows)
+    rows = common.minhash_dedup(rows, threshold=0.8)
+    if not rows:
+        print("nothing to finalize")
+        return 0
+    rng.shuffle(rows)
+    n_val = max(1, int(len(rows) * val_frac))
+    _append_jsonl(os.path.join(out_dir, "val.jsonl"), rows[:n_val])
+    _append_jsonl(os.path.join(out_dir, "train.jsonl"), rows[n_val:])
+    _update_manifest(rows, model, n_val=n_val)
+    for path in (raw_path, done_path):
+        if os.path.exists(path):
+            os.remove(path)
+    print(f"synthetic added: {len(rows)} (val {n_val})")
+    return len(rows)
+
+
+def pick_lang(key: str, pt_frac: float) -> str:
+    """Language for a chunk, derived from its key instead of a sequential draw.
+
+    A resumed run skips chunks it already did, so a shared RNG would land on a
+    different language for every remaining chunk. Deriving it from the key keeps
+    the EN/PT mix identical no matter how many times the run was interrupted.
+    """
+    return "pt" if int(key[:8], 16) / 0xFFFFFFFF < pt_frac else "en"
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seeds-dir", default="data/seeds")
@@ -242,6 +313,10 @@ def main() -> None:
     ap.add_argument("--fetch-seeds", action="store_true")
     ap.add_argument("--ollama-url", default=None, help="CLI override; else OLLAMA_HOST env; else localhost")
     ap.add_argument("--max-consecutive-failures", type=int, default=5)
+    ap.add_argument("--finalize", action="store_true",
+                    help="merge whatever a previous session already flushed, without generating more")
+    ap.add_argument("--fresh", action="store_true",
+                    help="discard the pending session (raw + done log) and start over")
     args = ap.parse_args()
 
     if args.fetch_seeds:
@@ -249,63 +324,84 @@ def main() -> None:
         print(f"seeds ready in {args.seeds_dir}")
         return
 
-    url = resolve_ollama_url(args.ollama_url, os.environ.get("OLLAMA_HOST"))
+    os.makedirs(args.out_dir, exist_ok=True)
+    raw_path = os.path.join(args.out_dir, "synthetic_raw.jsonl")
+    done_path = os.path.join(args.out_dir, "synthetic_done.txt")
+    if args.fresh:
+        for path in (raw_path, done_path):
+            if os.path.exists(path):
+                os.remove(path)
+        print("discarded pending session")
 
-    rng = random.Random(args.seed)
+    shuffle_rng = random.Random(args.seed)
+    rows = load_raw_rows(raw_path)
+    done = load_done_keys(done_path)
+    if rows or done:
+        print(f"resuming: {len(rows)} rows already flushed, {len(done)} chunks already done")
+
+    if args.finalize:
+        finalize(rows, args.out_dir, args.model, shuffle_rng, args.val_frac, raw_path, done_path)
+        return
+
+    url = resolve_ollama_url(args.ollama_url, os.environ.get("OLLAMA_HOST"))
     units = _load_seed_texts(args.seeds_dir)
     if not units:
         raise SystemExit(f"no seeds found in {args.seeds_dir}; run the fetch step (README).")
-    rng.shuffle(units)
+    random.Random(args.seed).shuffle(units)
 
-    rows, made, consecutive_failures = [], 0, 0
-    for source_tag, text in units:
-        if made >= args.target:
-            break
-        for chunk in chunk_text(text, 400):
+    made, consecutive_failures = len(rows), 0
+    with open(raw_path, "a", encoding="utf-8") as raw_fh, open(done_path, "a", encoding="utf-8") as done_fh:
+        for source_tag, text in units:
             if made >= args.target:
                 break
-            lang = "pt" if rng.random() < args.pt_frac else "en"
-            try:
-                raw = ollama_chat(args.model, build_gen_prompt(chunk, lang), url)
-            except Exception as e:
-                print(f"gen error ({source_tag}): {e}")
-                consecutive_failures += 1
-                if consecutive_failures >= args.max_consecutive_failures:
-                    raise SystemExit(
-                        f"{consecutive_failures} consecutive Ollama failures at {url}; "
-                        "is Ollama running and reachable from WSL2?"
-                    )
-                continue
-            consecutive_failures = 0
-            try:
-                for pair in parse_pairs(raw):
-                    if not common.response_len_ok(pair["answer"]):
-                        continue
-                    if not anchored(pair["answer"], chunk, k=2):
-                        continue
-                    rows.append({
-                        "messages": [
-                            {"role": "system", "content": common.SYSTEM_PROMPT},
-                            {"role": "user", "content": pair["question"]},
-                            {"role": "assistant", "content": pair["answer"]},
-                        ],
-                        "source": source_tag, "lang": lang,
-                        "theme": common.tag_theme(pair["question"] + " " + pair["answer"]),
-                    })
-                    made += 1
-            except Exception as e:
-                print(f"parse error ({source_tag}): {e}")
-                continue
-        print(f"progress: {made}/{args.target}")
+            for chunk in chunk_text(text, 400):
+                if made >= args.target:
+                    break
+                key = chunk_key(source_tag, chunk)
+                if key in done:
+                    continue
+                lang = pick_lang(key, args.pt_frac)
+                try:
+                    raw = ollama_chat(args.model, build_gen_prompt(chunk, lang), url)
+                except Exception as e:
+                    # Not marked done: a transient Ollama failure must be retried
+                    # on the next run, unlike a chunk the model simply answered badly.
+                    print(f"gen error ({source_tag}): {e}")
+                    consecutive_failures += 1
+                    if consecutive_failures >= args.max_consecutive_failures:
+                        raise SystemExit(
+                            f"{consecutive_failures} consecutive Ollama failures at {url}; "
+                            "is Ollama running and reachable from WSL2?"
+                        )
+                    continue
+                consecutive_failures = 0
+                try:
+                    for pair in parse_pairs(raw):
+                        if not common.response_len_ok(pair["answer"]):
+                            continue
+                        if not anchored(pair["answer"], chunk, k=2):
+                            continue
+                        _flush(raw_fh, {
+                            "messages": [
+                                {"role": "system", "content": common.SYSTEM_PROMPT},
+                                {"role": "user", "content": pair["question"]},
+                                {"role": "assistant", "content": pair["answer"]},
+                            ],
+                            "source": source_tag, "lang": lang,
+                            "theme": common.tag_theme(pair["question"] + " " + pair["answer"]),
+                        })
+                        made += 1
+                except Exception as e:
+                    print(f"parse error ({source_tag}): {e}")
+                    continue
+                done.add(key)
+                done_fh.write(key + "\n")
+                done_fh.flush()
+                os.fsync(done_fh.fileno())
+            print(f"progress: {made}/{args.target}")
 
-    rows = common.exact_dedup(rows)
-    rows = common.minhash_dedup(rows, threshold=0.8)
-    rng.shuffle(rows)
-    n_val = max(1, int(len(rows) * args.val_frac))
-    _append_jsonl(os.path.join(args.out_dir, "val.jsonl"), rows[:n_val])
-    _append_jsonl(os.path.join(args.out_dir, "train.jsonl"), rows[n_val:])
-    _update_manifest(rows, args.model, n_val=n_val)
-    print(f"synthetic added: {len(rows)} (val {n_val})")
+    finalize(load_raw_rows(raw_path), args.out_dir, args.model, shuffle_rng,
+             args.val_frac, raw_path, done_path)
 
 
 def _append_jsonl(path, rows):
