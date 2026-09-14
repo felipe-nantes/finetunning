@@ -189,21 +189,26 @@ visível é a qualidade das respostas abertas e a recusa consistente de pedidos 
 - **Plano B documentado, não escondido:** o 1.7B (config `1.7b.yaml`) e o 4B só rodam com ≥ 6 GB;
   o mesmo dataset e os mesmos scripts 04–06 servem com treino no Colab/Kaggle T4 + Unsloth.
 
-## Follow-ups antes do run completo
+## Follow-ups antes do run completo (resolvidos)
 
-Itens reais, adiados deliberadamente na revisão final (não bloqueiam esta branch, mas devem
-ser resolvidos antes do run completo de produção):
+Os quatro itens adiados na revisão final foram implementados antes do run de produção:
 
-- Filtro de comprimento da base pública por tokens vs o `max_length` de 768 usado no treino
-  (hoje `response_len_ok` conta tokens do próprio tokenizer, mas o corte não está alinhado
-  1:1 com o truncamento aplicado em treino/eval).
-- Flush incremental e resume na geração sintética (`02_gen_synthetic.py` só grava train/val
-  no final do `--target`; uma queda de energia no meio da noite perde a sessão inteira).
-- ~100–150 pares fora-de-escopo → recusa (EN/PT) na base de treino, para o modelo aprender a
-  recusar de forma consistente (hoje só a avaliação testa isso; o treino não tem exemplos
-  dedicados de recusa).
-- Model card completo no Hugging Face Hub: fontes, licenças, val loss, IC 95%, amostras
-  qualitativas e limitações conhecidas.
+- **Filtro de comprimento por tokens** alinhado ao `max_length` de 768: `01_build_dataset`
+  renderiza cada exemplo exatamente como treino/eval e descarta o que passa do orçamento ou
+  cuja resposta é curta demais (`--min-completion-tokens`, default 64). O manifest ganha o
+  bloco `length_filter`. O tokenizer vem do `--config` (default `configs/0.6b.yaml`).
+- **Flush incremental e resume** em `02_gen_synthetic`: cada par é gravado com `fsync` em
+  `synthetic_raw.jsonl` e a chunk fica registrada em `synthetic_done.txt`. Rodar o mesmo
+  comando após uma queda retoma de onde parou; `--finalize` fecha uma sessão pendente sem
+  gerar mais, `--fresh` descarta. A escolha EN/PT é derivada da chunk, então o mix não muda
+  entre resumes.
+- **Pares fora-de-escopo → recusa** (`scripts/oos_pairs.py`, `source: synthetic-oos`): 98
+  pares curados EN/PT que recusam pedidos de weaponização e redirecionam para o ângulo
+  autorizado. Entram no treino depois do dedup/cap (senão o MinHash colapsaria o template).
+  Desliga com `--no-oos`.
+- **Model card completo** (`06_push_hub`): base + licenças, fontes de dados, hiperparâmetros,
+  hardware e horas, tabela de eval com val loss e IC 95%, amostras qualitativas, limitações,
+  uso pretendido/não pretendido e `library_name: peft`.
 
 ## Estrutura
 
