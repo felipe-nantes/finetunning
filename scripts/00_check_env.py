@@ -65,8 +65,9 @@ def main() -> int:
         print("FAIL: loss is not finite"); ok = False
     if toks_per_s < 40:
         print("WARN: < 40 tok/s. Training will be very slow; consider seq 512 / 1 epoch / plan B.")
-    if peak_gb > 5.5:
-        print("WARN: peak VRAM > 5.5 GB on 0.6B; 1.7B may OOM. Reduce seq.")
+    total_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+    if peak_gb > total_gb * 0.8:
+        print(f"WARN: peak VRAM {peak_gb:.2f} GB is > 80% of the card ({total_gb:.1f} GB); reduce seq.")
 
     print("PASS" if ok else "FAIL")
     return 0 if ok else 1

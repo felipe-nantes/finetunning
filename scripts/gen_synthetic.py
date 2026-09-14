@@ -234,7 +234,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seeds-dir", default="data/seeds")
     ap.add_argument("--out-dir", default="data/processed")
-    ap.add_argument("--model", default="qwen2.5:7b-instruct-q4_K_M")
+    ap.add_argument("--model", default="qwen2.5:3b-instruct-q4_K_M")
     ap.add_argument("--target", type=int, default=1000)
     ap.add_argument("--pt-frac", type=float, default=0.30)
     ap.add_argument("--val-frac", type=float, default=0.05)

@@ -1,4 +1,4 @@
-# Design: QLoRA de um assistente de cibersegurança em GTX 1060 6GB
+# Design: QLoRA de um assistente de cibersegurança em GTX 1060 3GB
 
 **Data:** 2026-09-11
 **Status:** aprovado; pipeline implementado e revisado no laptop (2026-09-12); runs de GPU pendentes no desktop
@@ -8,7 +8,7 @@
 
 Fazer fine-tuning quantizado (QLoRA) de um LLM open-source pequeno para atuar como
 assistente de cibersegurança / pentest autorizado, usando apenas hardware de consumo
-(desktop com GTX 1060 6GB) e ferramentas gratuitas. O processo inteiro (dados, treino,
+(desktop com GTX 1060 3GB) e ferramentas gratuitas. O processo inteiro (dados, treino,
 avaliação, export, publicação) deve ser reproduzível e documentado para servir de
 portfólio.
 
@@ -25,7 +25,7 @@ Resultado esperado:
 
 | Máquina | Papel | Especificação |
 |---|---|---|
-| Desktop | treino, geração sintética, avaliação, export | GTX 1060 **6GB** (Pascal, sm_61), Windows + WSL2 Ubuntu |
+| Desktop | treino, geração sintética, avaliação, export | GTX 1060 **3GB** (Pascal, sm_61; ~0,45 GB ocupados pelo Windows, ≈2,6 GB livres), Windows + WSL2 Ubuntu |
 | Laptop | desenvolvimento dos scripts, teste final do GGUF em CPU | i5-1235U, 16GB RAM, Intel UHD (sem CUDA), 117GB livres, WSL2 Ubuntu |
 
 ### Consequências da GPU Pascal
@@ -35,7 +35,7 @@ Resultado esperado:
 - Flash-attention, Triton, Liger kernels: sem suporte a sm_61. **Não usar.** Atenção via SDPA padrão do PyTorch.
 - PyTorch: as wheels **`cu126` x86_64 (2.14.x)** embarcam SASS para `sm_50;sm_60;sm_70;sm_75;sm_80;sm_86;sm_90` (verificado no `build_env_setup.py` da tag). O cubin `sm_60` roda no `sm_61` da GTX 1060 por compatibilidade de minor version (X.z executa em X.w com w ≥ z). As wheels **CUDA 13.x removeram `sm_50/60/70`** e por isso **não rodam** na 1060. **Pinar uma build `cu126`** (fallback `cu128`, que também tem `sm_60`; nunca `cu130+`). O gate `00_check_env` confirma empiricamente, não confia só na lista.
 - bitsandbytes: a documentação oficial (até 0.50.x) lista **NF4/FP4 para Compute Capability 6.0+**, citando explicitamente a série GTX 10x0 (Pascal). Ou seja, Pascal **não** foi removido. **Pinar uma versão recente conhecida** (ex.: 0.48–0.50) e validar no smoke test, em vez de assumir que quebrou. LLM.int8() (8-bit) exige 7.5+, mas não é usado aqui.
-- Modelos de 7B não cabem: NF4 ≈ 4GB + embeddings/lm_head fp32 + ativações estouram 6GB.
+- **A GPU tem 3 GB (medido em 2026-09-14 com `nvidia-smi` no WSL2, não os 6 GB assumidos no brainstorming).** Nem o 1.7B cabe: só corpo NF4 (0,8 GB) + embeddings/lm_head fp32 (1,24 GB) + LoRA/otimizador já passam de 2,3 GB antes das ativações e do contexto CUDA. Primário passa a ser o **Qwen3-0.6B**; 1.7B/4B ficam para o plano B (T4 na nuvem).
 - **Armadilha descoberta na implementação:** a TRL 1.13 converte todos os parâmetros treináveis de um modelo 4-bit para **bf16** dentro de `SFTTrainer.__init__`, mesmo com `bf16=False`. Na Pascal isso significaria LoRA e otimizador em bf16. O `03_train.py` força os parâmetros treináveis de volta para fp32 depois de construir o trainer e aborta se sobrar algum não-fp32; o log do smoke deve mostrar `trainable params cast back to fp32: N`.
 
 ### Idioma
@@ -72,12 +72,13 @@ Alternativas consideradas e rejeitadas:
 
 | Papel | Modelo | Licença | Uso |
 |---|---|---|---|
-| Smoke test | `Qwen/Qwen3-0.6B` | Apache 2.0 | 100 steps, validar pipeline |
-| Primário | `Qwen/Qwen3-1.7B` | Apache 2.0 | Primeira rodada completa |
+| Smoke test | `Qwen/Qwen3-0.6B` | Apache 2.0 | 100 steps, validar pipeline (`configs/smoke.yaml`) |
+| Primário | `Qwen/Qwen3-0.6B` | Apache 2.0 | Rodada completa local, 2 épocas (`configs/0.6b.yaml`) |
+| Plano B | `Qwen/Qwen3-1.7B` | Apache 2.0 | Só com ≥ 6 GB (Colab/Kaggle T4 + Unsloth), `configs/1.7b.yaml` |
 | Stretch | `Qwen/Qwen3-4B-Instruct-2507` | Apache 2.0 | Segunda rodada, só se VRAM/tempo permitirem |
 
 Critérios: licença permissiva (publicação no Hub), suporte PT/EN, vocabulário e
-tamanho que cabem em 6GB com margem.
+tamanho que cabem em ~2,6 GB livres com margem.
 
 Passo obrigatório no plano: antes de baixar, verificar se surgiu modelo pequeno mais
 recente com licença permissiva e suporte a PT. Se sim, avaliar troca; a decisão fica
@@ -87,19 +88,22 @@ registrada no README.
 mas são modelos **multimodais com atenção linear híbrida** (`Qwen3_5ForConditionalGeneration`,
 vocab 248k, camadas de visão) — arquitetura nova, com suporte imaturo em `transformers`
 pinado, `bitsandbytes` e `llama.cpp`, e vocabulário maior que piora o orçamento de VRAM em
-6GB. Por isso a base primária continua **Qwen3-1.7B** (texto puro, vocab 151k, suporte
+3GB. Por isso a base primária continua na família **Qwen3** (texto puro, vocab 151k, suporte
 universal e comprovado em GGUF). Qwen3.5 fica anotado como experimento futuro no README.
 
-### Orçamento de VRAM (Qwen3-1.7B, seq 768, batch 1)
+### Orçamento de VRAM (Qwen3-0.6B, seq 768, batch 1)
 
 | Item | ~GB |
 |---|---|
-| Corpo em NF4 | 0.8 |
-| Embeddings / lm_head em fp32 (não quantizados) | 1.2 |
-| LoRA + estados do otimizador | 0.3 |
-| Ativações com gradient checkpointing | 0.5 |
-| Pico de logits + loss | 0.4 |
-| **Total estimado** | **~3.2** |
+| Corpo em NF4 (~0,44B params) | 0.25 |
+| Embeddings / lm_head em fp32 (151936 × 1024, tied) | 0.62 |
+| LoRA r=16 (~10M params) + otimizador + grads | 0.16 |
+| Ativações com gradient checkpointing | 0.15 |
+| Pico de logits + loss (`chunked_nll`) | 0.3 |
+| Contexto CUDA | 0.2 |
+| **Total estimado** | **~1.7 de ~2.6 livres** |
+
+Para referência, o mesmo cálculo no 1.7B dá ~2,8–3,0 GB, acima do disponível.
 
 O pico de logits é baixo porque a TRL usa por padrão `loss_type="chunked_nll"`: a projeção do
 `lm_head` é feita só nos tokens não-mascarados, em blocos, mantendo vivo apenas

@@ -94,8 +94,9 @@ def main() -> None:
     from huggingface_hub import HfApi
     api = HfApi()
 
-    lora_repo = f"{args.user}/decria-sec-1.7b-lora"
-    gguf_repo = f"{args.user}/decria-sec-1.7b-GGUF"
+    hub_name = cfg.get("hub_name", "decria-sec")
+    lora_repo = f"{args.user}/{hub_name}-lora"
+    gguf_repo = f"{args.user}/{hub_name}-GGUF"
     data_repo = f"{args.user}/decria-sec-dataset"
 
     api.create_repo(lora_repo, exist_ok=True)

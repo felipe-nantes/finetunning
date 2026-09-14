@@ -1,5 +1,6 @@
 model_name: Qwen/Qwen3-1.7B
 output_dir: outputs/qwen3-1.7b
+hub_name: decria-sec-1.7b
 max_length: 768
 per_device_train_batch_size: 1
 gradient_accumulation_steps: 16

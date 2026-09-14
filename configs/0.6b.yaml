@@ -1,7 +1,7 @@
-model_name: Qwen/Qwen3-4B-Instruct-2507
-output_dir: outputs/qwen3-4b
-hub_name: decria-sec-4b
-max_length: 512
+model_name: Qwen/Qwen3-0.6B
+output_dir: outputs/qwen3-0.6b
+hub_name: decria-sec-0.6b
+max_length: 768
 per_device_train_batch_size: 1
 gradient_accumulation_steps: 16
 learning_rate: 2.0e-4

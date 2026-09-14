@@ -1,8 +1,8 @@
-# decria-sec — fine-tuning QLoRA de um assistente de cibersegurança numa GTX 1060 6GB
+# decria-sec — fine-tuning QLoRA de um assistente de cibersegurança numa GTX 1060 3GB
 
 > **English summary.** End-to-end QLoRA fine-tune of `Qwen/Qwen3-1.7B` into a bilingual
 > (EN strong, PT functional) assistant for *authorized* penetration testing and defense,
-> trained on a single 2016-era GTX 1060 6GB (Pascal). Public + locally-generated synthetic
+> trained on a single 2016-era GTX 1060 **3GB** (Pascal). Public + locally-generated synthetic
 > data, honest before/after evaluation, GGUF export for Ollama, everything reproducible from
 > this repo. Zero paid APIs.
 
@@ -16,11 +16,11 @@ de escopo são recusados (e isso é avaliado).
 
 | Restrição | Consequência |
 |---|---|
-| GTX 1060 6GB é Pascal (`sm_61`) | Sem bf16. fp16 roda a 1/64 da velocidade. **Todo compute em fp32.** |
+| GTX 1060 3GB é Pascal (`sm_61`) | Sem bf16. fp16 roda a 1/64 da velocidade. **Todo compute em fp32.** |
 | Compute capability 6.1 | Unsloth, flash-attention, Triton/Liger exigem 7.0+. **Nenhum deles é usado.** |
 | Wheels PyTorch CUDA 13.x removeram Pascal | Pinado em `cu126`, cuja SASS `sm_60` roda no `sm_61`. Nunca `cu130+`. |
-| 6 GB de VRAM | Modelos de 7B não cabem. Base primária: **Qwen3-1.7B** em NF4 (~3.2 GB de pico estimado). |
-| Sem API paga | Dados sintéticos gerados localmente via Ollama (`qwen2.5:7b-instruct-q4_K_M`). |
+| 3 GB de VRAM (≈2,6 GB livres; o Windows usa ~0,45 GB para o monitor) | Nem o 1.7B cabe (~2,8–3,0 GB só de estático). Base primária: **Qwen3-0.6B** em NF4 (~1,7 GB de pico estimado). 1.7B só no plano B (Colab/Kaggle T4). |
+| Sem API paga | Dados sintéticos gerados localmente via Ollama (`qwen2.5:3b-instruct-q4_K_M`, 1,9 GB; o 7B não cabe em 3 GB). |
 
 Detalhes e alternativas descartadas: [spec de design](docs/superpowers/specs/2026-09-11-qlora-cybersec-design.md).
 Plano de implementação com cada passo: [plano](docs/superpowers/plans/2026-09-11-qlora-cybersec.md).
@@ -45,7 +45,7 @@ Cada script tem a lógica em `scripts/<nome>.py` (importável, testado) e um ata
 | Máquina | Papel |
 |---|---|
 | Laptop (i5-1235U, sem GPU NVIDIA) | escrever código, rodar testes unitários, teste final do GGUF em CPU |
-| Desktop (GTX 1060 6GB, Windows + WSL2 Ubuntu) | tudo que usa GPU: gate, geração sintética, treino, avaliação, export |
+| Desktop (GTX 1060 3GB, Windows + WSL2 Ubuntu) | tudo que usa GPU: gate, geração sintética, treino, avaliação, export |
 
 O `pyproject.toml` escolhe o torch certo sozinho: build CUDA 12.6 no Linux (WSL2), build CPU
 no Windows. Por isso **no desktop, use sempre o terminal Ubuntu do WSL2**, nunca o PowerShell.
@@ -81,14 +81,14 @@ uv run python scripts/01_build_dataset.py             # ~3k exemplos publicos ->
 > (ou defina a variável de ambiente `OLLAMA_HOST` com o mesmo valor).
 
 ```bash
-ollama pull qwen2.5:7b-instruct-q4_K_M                # gerador local (4.7 GB, cabe na 1060)
+ollama pull qwen2.5:3b-instruct-q4_K_M                # gerador local (1.9 GB; o 7B nao cabe em 3 GB)
 uv run python scripts/02_gen_synthetic.py --fetch-seeds
 uv run python scripts/02_gen_synthetic.py --target 1000   # ~5-6 h, rode de noite
 ```
 
 ```bash
 uv run python scripts/03_train.py --config configs/smoke.yaml   # Qwen3-0.6B, 100 steps
-uv run python scripts/03_train.py --config configs/1.7b.yaml    # run real, ~8-11 h estimadas
+uv run python scripts/03_train.py --config configs/0.6b.yaml    # run real, ~3-4 h estimadas (1.7b.yaml so no plano B)
 ```
 
 > **Checklist do smoke:** no log de treino, logo antes do primeiro passo, precisa aparecer
@@ -98,21 +98,21 @@ uv run python scripts/03_train.py --config configs/1.7b.yaml    # run real, ~8-1
 > (Pascal) exige.
 
 ```bash
-uv run python scripts/04_eval.py --config configs/1.7b.yaml     # base vs adapter -> docs/
+uv run python scripts/04_eval.py --config configs/0.6b.yaml     # base vs adapter -> docs/
 ```
 
 ```bash
 git clone --depth 1 https://github.com/ggml-org/llama.cpp ../llama.cpp
 cmake -S ../llama.cpp -B ../llama.cpp/build && cmake --build ../llama.cpp/build -j --target llama-quantize
 uv pip install -r ../llama.cpp/requirements.txt
-uv run python scripts/05_merge_export.py --config configs/1.7b.yaml
-cd outputs/qwen3-1.7b/gguf && ollama create decria-sec -f Modelfile && ollama run decria-sec "Explique IDOR de forma autorizada"
+uv run python scripts/05_merge_export.py --config configs/0.6b.yaml
+cd outputs/qwen3-0.6b/gguf && ollama create decria-sec -f Modelfile && ollama run decria-sec "Explique IDOR de forma autorizada"
 ollama show decria-sec --modelfile     # confirma que o TEMPLATE termina no prefixo do assistant
 ```
 
 ```bash
 uv run huggingface-cli login
-uv run python scripts/06_push_hub.py --user <HF_USER> --config configs/1.7b.yaml --hours <horas medidas>
+uv run python scripts/06_push_hub.py --user <HF_USER> --config configs/0.6b.yaml --hours <horas medidas>
 ```
 
 Queda de energia no meio do treino: rode o mesmo comando de novo. O script retoma do último
@@ -144,7 +144,7 @@ trecho-fonte (a resposta precisa citar termos do chunk), dedup contra a base.
 Pendente do run no desktop. Esta seção vai receber, nesta ordem:
 
 1. Saída literal do `00_check_env.py` (GPU, arch list, tok/s, pico de VRAM).
-2. Horas de parede e pico de VRAM do run de 1.7B.
+2. Horas de parede e pico de VRAM do run de 0.6B.
 3. Tabela `docs/eval_results.json`: acurácia no CyberMetric-500, base vs adapter, IC 95%.
 4. Trechos de `docs/samples.md`: 2 respostas EN, 1 PT e a recusa do prompt fora de escopo.
 5. Links dos 3 repositórios no Hugging Face Hub.
@@ -163,10 +163,14 @@ visível é a qualidade das respostas abertas e a recusa consistente de pedidos 
   exatamente o que o modelo vê na inferência.
 - **`warmup_steps=0.03`** em vez de `warmup_ratio`: a transformers 5.x unificou os dois campos
   (fração `< 1` vira ratio). Descoberto por um teste unitário que constrói o `SFTConfig`.
-- **Plano B documentado, não escondido:** se a 1060 ficar abaixo de ~40 tok/s no gate, o
-  mesmo dataset e os mesmos scripts 04–06 rodam com treino no Colab/Kaggle T4 + Unsloth.
+- **A GPU real tem 3 GB, não 6.** Descoberto no primeiro `nvidia-smi` dentro do WSL2 (o Windows
+  ainda usa ~0,45 GB para o monitor). O Qwen3-1.7B precisa de ~2,8–3,0 GB só de estático em NF4 +
+  embeddings fp32, então saiu do treino local. O primário virou o **Qwen3-0.6B** (~1,7 GB de pico),
+  e a história do portfólio ficou mais extrema: QLoRA numa GPU de 3 GB.
+- **Plano B documentado, não escondido:** o 1.7B (config `1.7b.yaml`) e o 4B só rodam com ≥ 6 GB;
+  o mesmo dataset e os mesmos scripts 04–06 servem com treino no Colab/Kaggle T4 + Unsloth.
 
-## Follow-ups antes do run de 1.7B
+## Follow-ups antes do run completo
 
 Itens reais, adiados deliberadamente na revisão final (não bloqueiam esta branch, mas devem
 ser resolvidos antes do run completo de produção):
@@ -185,7 +189,7 @@ ser resolvidos antes do run completo de produção):
 ## Estrutura
 
 ```
-configs/            smoke.yaml, 1.7b.yaml, 4b.yaml
+configs/            smoke.yaml, 0.6b.yaml (primario, 3 GB), 1.7b.yaml e 4b.yaml (plano B, >= 6 GB)
 scripts/            common.py + 7 modulos + 7 atalhos numerados
 tests/              pytest, tudo roda em CPU
 eval/               12 prompts fixos + 5 de regressao (congelados)
