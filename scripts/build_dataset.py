@@ -39,6 +39,32 @@ def normalize_row(raw: dict, source: str) -> dict | None:
     }
 
 
+def filter_by_token_budget(rows, tokenizer, max_length: int, min_completion_tokens: int = 64):
+    """Keep only rows that survive the training tokenizer intact.
+
+    The word-count prefilter in `normalize_row` is cheap but does not line up
+    with the `max_length` truncation applied in train/eval: a row longer than
+    that budget would reach the model with its answer chopped mid-sentence,
+    teaching it to stop abruptly. Here the row is rendered exactly as training
+    renders it and measured in tokens, so nothing that stays is ever truncated.
+
+    Returns (kept_rows, stats).
+    """
+    kept = []
+    stats = {"seen": len(rows), "over_max_length": 0, "under_min_completion": 0,
+             "max_length": max_length, "min_completion_tokens": min_completion_tokens}
+    for row in rows:
+        if common.rendered_token_len(row, tokenizer) > max_length:
+            stats["over_max_length"] += 1
+            continue
+        if common.completion_token_len(row, tokenizer) < min_completion_tokens:
+            stats["under_min_completion"] += 1
+            continue
+        kept.append(row)
+    stats["kept"] = len(kept)
+    return kept, stats
+
+
 def stratified_cap(rows: list[dict], cap: int, key: str = "theme", seed: int = 42) -> list[dict]:
     if len(rows) <= cap:
         return list(rows)
@@ -70,9 +96,15 @@ def main() -> None:
     ap.add_argument("--val-frac", type=float, default=0.05)
     ap.add_argument("--limit", type=int, default=-1, help="debug: cap raw rows per source")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--config", default="configs/0.6b.yaml",
+                    help="run config: supplies the tokenizer and the max_length the filter aligns to")
+    ap.add_argument("--min-completion-tokens", type=int, default=64)
     args = ap.parse_args()
 
     from datasets import load_dataset
+    from transformers import AutoTokenizer
+    run_cfg = common.load_config(args.config)
+    tokenizer = AutoTokenizer.from_pretrained(run_cfg["model_name"])
     os.makedirs(args.out_dir, exist_ok=True)
     manifest = {"sources": [], "cap": args.cap, "seed": args.seed}
     all_rows = []
@@ -86,6 +118,12 @@ def main() -> None:
             {"repo": repo, "source": source, "license": lic, "raw": raw_n, "kept": len(kept)}
         )
         all_rows.extend(kept)
+
+    all_rows, len_stats = filter_by_token_budget(
+        all_rows, tokenizer, run_cfg["max_length"], args.min_completion_tokens
+    )
+    len_stats["tokenizer"] = run_cfg["model_name"]
+    manifest["length_filter"] = len_stats
 
     before = len(all_rows)
     all_rows = common.exact_dedup(all_rows)

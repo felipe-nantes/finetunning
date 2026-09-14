@@ -103,6 +103,24 @@ def minhash_dedup(rows: list[dict], threshold: float = 0.8, num_perm: int = 128)
     return out
 
 
+def rendered_token_len(row: dict, tokenizer) -> int:
+    """Tokens the row occupies once rendered exactly as training/eval sees it.
+
+    Training and eval both feed `to_prompt_completion` output through the
+    tokenizer and truncate at `max_length`, so this is the only count that
+    lines up 1:1 with what the model actually reads.
+    """
+    pc = to_prompt_completion(row, tokenizer)
+    ids = tokenizer(pc["prompt"] + pc["completion"], add_special_tokens=False)["input_ids"]
+    return len(ids)
+
+
+def completion_token_len(row: dict, tokenizer) -> int:
+    """Tokens of the assistant turn alone (the part the loss is computed on)."""
+    pc = to_prompt_completion(row, tokenizer)
+    return len(tokenizer(pc["completion"], add_special_tokens=False)["input_ids"])
+
+
 def to_prompt_completion(example: dict, tokenizer) -> dict:
     msgs = example["messages"]
     assert msgs[-1]["role"] == "assistant", "last message must be assistant"
