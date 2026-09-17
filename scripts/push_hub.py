@@ -7,6 +7,7 @@ actually trained the adapter, so the model card never claims the wrong hardware.
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import os
 
@@ -23,21 +24,66 @@ def _eval_row(label: str, m: dict) -> str:
     return f"| {label} | {acc} | {ci_txt} | {vl_txt} |"
 
 
-def _sources_block(manifest: dict) -> str:
-    lines = [f"- `{s['repo']}` — {s['license']} — {s.get('kept', '?')} rows (public)"
-             for s in manifest.get("sources", [])]
-    syn = manifest.get("synthetic", {}).get("by_source", {})
+PROCESSED_FILES = ("data/processed/train.jsonl", "data/processed/val.jsonl")
+
+
+def count_sources(paths=PROCESSED_FILES) -> dict[str, int]:
+    """Rows per `source` in the published JSONL files. This is the ground truth
+    for what a source actually contributed: the manifest's per-source `kept` is
+    counted BEFORE dedup/cap, so a source fully overlapped by another one shows
+    a big `kept` there while contributing zero rows to train/val."""
+    counts: collections.Counter = collections.Counter()
+    for path in paths:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                if line.strip():
+                    counts[json.loads(line)["source"]] += 1
+    return dict(counts)
+
+
+def _public_lines(manifest: dict, counts: dict) -> list[str]:
+    """One line per public source that has at least one row in the final files."""
+    lines = []
+    for s in manifest.get("sources", []):
+        n = counts.get(s.get("source"), 0)
+        if n == 0:
+            continue
+        lines.append(f"- `{s['repo']}` — {s['license']} — {n} rows")
+    return lines
+
+
+def _synthetic_counts(counts: dict) -> dict:
+    return {k: v for k, v in sorted(counts.items())
+            if k.startswith("synthetic-") and k != "synthetic-oos"}
+
+
+def _sources_block(manifest: dict, counts: dict) -> str:
+    lines = [ln + " (public)" for ln in _public_lines(manifest, counts)]
     lines += [f"- {k} — generated locally via Ollama from licensed seeds — {v} rows"
-              for k, v in syn.items()]
-    oos = manifest.get("oos_refusals", {}).get("added")
+              for k, v in _synthetic_counts(counts).items()]
+    oos = counts.get("synthetic-oos", 0)
     if oos:
         lines.append(f"- synthetic-oos — curated out-of-scope→refusal pairs — {oos} rows")
     return "\n".join(lines) if lines else "- see the dataset repo `NOTICE` for per-source attribution"
 
 
+def _excluded_block(manifest: dict) -> str:
+    """Sources that were evaluated and dropped, with the numbers behind it."""
+    lines = []
+    for e in manifest.get("excluded_sources", []):
+        lines.append(
+            f"- `{e['repo']}` — kept {e.get('kept_pre_dedup', '?')} rows before dedup, "
+            f"{e.get('kept_post_dedup', '?')} after — {e.get('reason', '')}"
+        )
+    if not lines:
+        return ""
+    return "\n## Sources evaluated and excluded\n" + "\n".join(lines) + "\n"
+
+
 def render_model_card(meta: dict) -> str:
     e = meta["eval"]
     manifest = meta.get("manifest", {})
+    counts = meta.get("source_counts", {})
     samples = (meta.get("samples_md") or
                "See `docs/samples.md` in the GitHub repo for base-vs-adapter outputs.")
     return f"""---
@@ -73,8 +119,8 @@ dedicated out-of-scope→refusal pairs (EN/PT) and checked in evaluation.
 - Adapter released under the same terms; see the GitHub repo `NOTICE`.
 
 ## Training data
-{_sources_block(manifest)}
-
+{_sources_block(manifest, counts)}
+{_excluded_block(manifest)}
 Published dataset license is `cc-by-sa-4.0` (share-alike umbrella covering OWASP
 WSTG). CyberMetric is used for **evaluation only** and is never redistributed.
 
@@ -110,12 +156,14 @@ is on GitHub.
 """
 
 
-def render_dataset_card(manifest: dict) -> str:
-    src_lines = "\n".join(
-        f"- `{s['repo']}` — {s['license']} — {s['kept']} rows" for s in manifest.get("sources", [])
-    )
-    syn = manifest.get("synthetic", {}).get("by_source", {})
-    syn_lines = "\n".join(f"- {k}: {v}" for k, v in syn.items())
+def render_dataset_card(manifest: dict, source_counts: dict) -> str:
+    """`source_counts` comes from `count_sources()` over the files being
+    published; the manifest only supplies repos, licenses and exclusions."""
+    src_lines = "\n".join(_public_lines(manifest, source_counts)) or "- none"
+    syn_lines = "\n".join(f"- {k}: {v}" for k, v in _synthetic_counts(source_counts).items()) or "- none"
+    oos = source_counts.get("synthetic-oos", 0)
+    if oos:
+        syn_lines += f"\n- synthetic-oos (curated out-of-scope→refusal pairs): {oos}"
     return f"""---
 license: cc-by-sa-4.0
 language: [en, pt]
@@ -132,7 +180,7 @@ Train {manifest.get('train','?')} / val {manifest.get('val','?')}.
 
 ## Synthetic (generated locally via Ollama from licensed seeds)
 {syn_lines}
-
+{_excluded_block(manifest)}
 License is `cc-by-sa-4.0` as the share-alike umbrella; see `NOTICE` for per-source
 attribution. CyberMetric is used for evaluation only and is not included here.
 """
@@ -167,10 +215,11 @@ def main() -> None:
         ev = json.load(fh)
     with open("data/manifest.json", encoding="utf-8") as fh:
         manifest = json.load(fh)
+    source_counts = count_sources(PROCESSED_FILES)
 
     meta = {"model_name": cfg["model_name"], "base_license": "apache-2.0",
             "hours": args.hours, "gpu": args.gpu, "eval": ev,
-            "manifest": manifest,
+            "manifest": manifest, "source_counts": source_counts,
             "samples_md": _samples_excerpt("docs/samples.md"),
             "max_length": cfg["max_length"],
             "lora_r": cfg["lora_r"], "lora_alpha": cfg["lora_alpha"],
@@ -197,7 +246,7 @@ def main() -> None:
 
     api.create_repo(data_repo, repo_type="dataset", exist_ok=True)
     with open("data/processed/README.md", "w", encoding="utf-8") as fh:
-        fh.write(render_dataset_card(manifest))
+        fh.write(render_dataset_card(manifest, source_counts))
     api.upload_folder(folder_path="data/processed", repo_id=data_repo, repo_type="dataset",
                       allow_patterns=["*.jsonl", "README.md"])
     api.upload_file(path_or_fileobj="NOTICE", path_in_repo="NOTICE", repo_id=data_repo, repo_type="dataset")
