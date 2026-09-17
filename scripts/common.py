@@ -71,7 +71,7 @@ def tag_theme(text: str) -> str:
 
 
 def _row_text(row: dict) -> str:
-    return " ".join(m["content"] for m in row["messages"])
+    return " ".join(m["content"] for m in row["messages"] if m["role"] != "system")
 
 
 def exact_dedup(rows: list[dict]) -> list[dict]:

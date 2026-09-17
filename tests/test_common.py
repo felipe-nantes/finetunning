@@ -49,6 +49,37 @@ def test_minhash_dedup_removes_near_dupes():
     assert len(out) == 2
 
 
+def test_minhash_dedup_ignores_shared_system_prompt():
+    # Every row in the pipeline carries the identical SYSTEM_PROMPT verbatim.
+    # If _row_text included it, two rows about genuinely different topics but
+    # written in similar templated phrasing (common across the public
+    # cybersecurity datasets) can collide: 0.77 jaccard without the system
+    # text, 0.87 with it -- crossing the 0.8 threshold only because of the
+    # shared boilerplate, not because the content is a near-duplicate.
+    row_a = {"messages": [
+        {"role": "system", "content": common.SYSTEM_PROMPT},
+        {"role": "user", "content": "What do I check during an authorized pentest for injection issues in the login form?"},
+        {"role": "assistant", "content": (
+            "During an authorized penetration testing engagement, check the login "
+            "form for injection issues, review the relevant configuration, confirm "
+            "the finding with a safe proof of concept, and document the result for "
+            "the client report before moving to the next target."
+        )},
+    ]}
+    row_b = {"messages": [
+        {"role": "system", "content": common.SYSTEM_PROMPT},
+        {"role": "user", "content": "What do I check during an authorized pentest for privilege escalation issues in the cron jobs?"},
+        {"role": "assistant", "content": (
+            "During an authorized penetration testing engagement, check the cron "
+            "jobs for privilege escalation issues, review the relevant permissions, "
+            "confirm the finding with a safe proof of concept, and document the "
+            "result for the client report before moving to the next target."
+        )},
+    ]}
+    out = common.minhash_dedup([row_a, row_b], threshold=0.8)
+    assert len(out) == 2
+
+
 def test_to_prompt_completion_shapes():
     class FakeTok:
         eos_token = "<|im_end|>"
