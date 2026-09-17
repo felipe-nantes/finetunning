@@ -29,7 +29,7 @@ Plano de implementação com cada passo: [plano](docs/superpowers/plans/2026-09-
 
 ```
 00_check_env      gate: GPU, arch list, NF4 round-trip, tok/s, pico de VRAM
-01_build_dataset  Trendyol + AlicanKiraz0 (apache-2.0) -> filtros -> dedup -> split
+01_build_dataset  Trendyol (apache-2.0) -> filtros -> dedup -> split
 02_gen_synthetic  ATT&CK + CWE Top 25 + OWASP WSTG + docs de ferramentas -> Ollama -> Q/A (EN/PT)
 03_train          QLoRA: NF4 + LoRA r=16, fp32, loss so na resposta, checkpoint/resume
 04_eval           CyberMetric-500 (MCQ), val loss, 12 prompts fixos, 5 de regressao
@@ -141,8 +141,7 @@ que de fato treinou e o tempo medido.
 
 | Fonte | Tipo | Licença | Uso |
 |---|---|---|---|
-| `Trendyol/Trendyol-Cybersecurity-Instruction-Tuning-Dataset` | instruções, EN, 53k | apache-2.0 | base pública (filtrada, cap 3k junto com a de baixo) |
-| `AlicanKiraz0/Cybersecurity-Dataset-v1` | instruções, EN, 2.4k | apache-2.0 | base pública |
+| `Trendyol/Trendyol-Cybersecurity-Instruction-Tuning-Dataset` | instruções, EN, 53k | apache-2.0 | base pública (filtrada, cap 3k) |
 | MITRE ATT&CK (STIX) | técnicas + mitigações | licença MITRE (atribuição) | seed sintético |
 | CWE Top 25 (API oficial) | fraquezas | termos MITRE (atribuição) | seed sintético |
 | OWASP WSTG | guia de teste web | CC BY-SA 4.0 | seed sintético |
@@ -188,6 +187,17 @@ visível é a qualidade das respostas abertas e a recusa consistente de pedidos 
   e a história do portfólio ficou mais extrema: QLoRA numa GPU de 3 GB.
 - **Plano B documentado, não escondido:** o 1.7B (config `1.7b.yaml`) e o 4B só rodam com ≥ 6 GB;
   o mesmo dataset e os mesmos scripts 04–06 servem com treino no Colab/Kaggle T4 + Unsloth.
+- **`AlicanKiraz0/Cybersecurity-Dataset-v1` saiu das fontes ativas.** Era a segunda fonte pública.
+  Das 2.411 linhas brutas, 2.390 passam nos filtros; **100% delas são duplicata exata** (SHA256 do
+  texto user+assistant) de linhas do Trendyol, e o campo `system` bruto dos dois datasets no
+  HuggingFace também coincide. Nenhuma das duas dataset cards credita a outra; não sabemos qual
+  derivou de qual e não afirmamos nada sobre isso. Resultado prático: a fonte contribuía 0 linhas
+  pós-dedup, então `data/processed` não muda. Ela fica registrada em `EXCLUDED_SOURCES`
+  (`scripts/build_dataset.py`) e em `excluded_sources` no manifest, e o card do dataset ganhou a
+  seção "Sources evaluated and excluded". No mesmo passo, os cards passaram a contar a
+  contribuição por fonte direto de `train.jsonl` + `val.jsonl` em vez do `kept` pré-dedup do
+  manifest, que reportaria contribuição falsa para qualquer fonte sobreposta. Evidência
+  reproduzível em [docs/data-provenance-note.md](docs/data-provenance-note.md).
 
 ## Follow-ups antes do run completo (resolvidos)
 
@@ -218,8 +228,8 @@ scripts/            common.py + 7 modulos + 7 atalhos numerados
 tests/              pytest, tudo roda em CPU
 eval/               12 prompts fixos + 5 de regressao (congelados)
 data/processed/     train/val jsonl (vai pro Hub, nao pro git)
-data/manifest.json  manifest cumulativo: fontes publicas + sintetico, contagens train/val
-docs/               spec, plano, eval_results.json, samples.md
+data/manifest.json  manifest cumulativo: fontes publicas + excluidas + sintetico, contagens train/val
+docs/               spec, plano, nota de proveniencia dos dados, eval_results.json, samples.md
 outputs/            checkpoints, merges, gguf (fora do git)
 NOTICE              atribuicao de cada fonte de dados
 Modelfile           gerado pelo 05_merge_export

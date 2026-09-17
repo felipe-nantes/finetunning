@@ -6,27 +6,28 @@
       "license": "apache-2.0",
       "raw": 53201,
       "kept": 52382
-    },
+    }
+  ],
+  "excluded_sources": [
     {
       "repo": "AlicanKiraz0/Cybersecurity-Dataset-v1",
-      "source": "alicankiraz0",
-      "license": "apache-2.0",
-      "raw": 2411,
-      "kept": 2390
+      "reason": "100% das 2390 linhas normalizadas sao duplicata exata (SHA256 do texto user+assistant) de linhas do Trendyol/Trendyol-Cybersecurity-Instruction-Tuning-Dataset -- inclusive o campo system bruto de ambos os datasets originais no HuggingFace coincide. Nenhuma das duas dataset cards credita a outra. Verificado em 2026-09-16.",
+      "kept_pre_dedup": 2390,
+      "kept_post_dedup": 0
     }
   ],
   "cap": 3000,
   "seed": 42,
   "length_filter": {
-    "seen": 54772,
-    "over_max_length": 957,
+    "seen": 52382,
+    "over_max_length": 521,
     "under_min_completion": 0,
     "max_length": 768,
     "min_completion_tokens": 64,
-    "kept": 53815,
+    "kept": 51861,
     "tokenizer": "Qwen/Qwen3-0.6B"
   },
-  "deduped_from": 53815,
+  "deduped_from": 51861,
   "after_dedup": 51859,
   "oos_refusals": {
     "added": 98,

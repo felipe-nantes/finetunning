@@ -11,7 +11,24 @@ from scripts import common
 
 SOURCES = [
     ("Trendyol/Trendyol-Cybersecurity-Instruction-Tuning-Dataset", "trendyol", "apache-2.0"),
-    ("AlicanKiraz0/Cybersecurity-Dataset-v1", "alicankiraz0", "apache-2.0"),
+]
+
+# Sources that were evaluated for the public layer and dropped. Kept here (and
+# copied into the manifest) so the dataset card can say why they are absent
+# instead of silently listing only what survived.
+EXCLUDED_SOURCES = [
+    {
+        "repo": "AlicanKiraz0/Cybersecurity-Dataset-v1",
+        "reason": (
+            "100% das 2390 linhas normalizadas sao duplicata exata (SHA256 do "
+            "texto user+assistant) de linhas do Trendyol/Trendyol-Cybersecurity-"
+            "Instruction-Tuning-Dataset -- inclusive o campo system bruto de "
+            "ambos os datasets originais no HuggingFace coincide. Nenhuma das "
+            "duas dataset cards credita a outra. Verificado em 2026-09-16."
+        ),
+        "kept_pre_dedup": 2390,
+        "kept_post_dedup": 0,
+    },
 ]
 
 
@@ -108,7 +125,8 @@ def main() -> None:
     run_cfg = common.load_config(args.config)
     tokenizer = AutoTokenizer.from_pretrained(run_cfg["model_name"])
     os.makedirs(args.out_dir, exist_ok=True)
-    manifest = {"sources": [], "cap": args.cap, "seed": args.seed}
+    manifest = {"sources": [], "excluded_sources": EXCLUDED_SOURCES,
+                "cap": args.cap, "seed": args.seed}
     all_rows = []
     for repo, source, lic in SOURCES:
         ds = load_dataset(repo, split="train")

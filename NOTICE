@@ -4,7 +4,6 @@ Published under CC BY-SA 4.0 as a share-alike umbrella.
 
 Public instruction data:
 - Trendyol/Trendyol-Cybersecurity-Instruction-Tuning-Dataset — Apache-2.0
-- AlicanKiraz0/Cybersecurity-Dataset-v1 — Apache-2.0
 
 Synthetic data generated locally (Ollama) from:
 - MITRE ATT&CK (attack-stix-data) — MITRE ATT&CK Terms of Use (attribution required)
