@@ -1,7 +1,7 @@
 # decria-sec — fine-tuning QLoRA de um assistente de cibersegurança numa GTX 1060 3GB
 
 > **English summary.** End-to-end QLoRA fine-tune of `Qwen/Qwen3-1.7B` into a bilingual
-> (EN strong, PT functional) assistant for *authorized* penetration testing and defense,
+> assistant for *authorized* penetration testing and defense,
 > trained on a single 2016-era GTX 1060 **3GB** (Pascal). Public + locally-generated synthetic
 > data, honest before/after evaluation, GGUF export for Ollama, everything reproducible from
 > this repo. Zero paid APIs.
