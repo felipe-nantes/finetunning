@@ -112,11 +112,30 @@ ollama show decria-sec --modelfile     # confirma que o TEMPLATE termina no pref
 
 ```bash
 uv run huggingface-cli login
-uv run python scripts/06_push_hub.py --user <HF_USER> --config configs/0.6b.yaml --hours <horas medidas>
+uv run python scripts/06_push_hub.py --config configs/0.6b.yaml --hours <horas medidas>
 ```
+
+O `--user` é opcional (o padrão é o dono do token logado) e o `--gpu` diz qual placa treinou o
+adapter, para o model card nunca afirmar o hardware errado (padrão: `GTX 1060 3GB`).
 
 Queda de energia no meio do treino: rode o mesmo comando de novo. O script retoma do último
 checkpoint sozinho.
+
+## Rodar no Kaggle (T4 grátis)
+
+O plano B em um notebook só: [`kaggle/decria_sec_qlora_kaggle_t4.ipynb`](kaggle/decria_sec_qlora_kaggle_t4.ipynb)
+clona este repositório, recria o ambiente do `uv.lock` e roda os passos 01 a 06 de ponta a ponta
+numa T4 do Kaggle, incluindo o Ollama para os dados sintéticos e o build do llama.cpp para o GGUF.
+
+1. No Kaggle: **Create > New Notebook > File > Import Notebook** e envie o arquivo `.ipynb`.
+2. Em *Session options*: **Accelerator = GPU T4 x1** e **Internet = On**.
+3. Em *Add-ons > Secrets*: crie `HF_TOKEN` com um token de escrita do Hugging Face e anexe ao
+   notebook. Sem o segredo, o notebook roda igual e só pula o upload.
+4. **Save Version > Save & Run All (Commit)**. O run segue em segundo plano.
+
+Na primeira célula, `CONFIG` escolhe o modelo: `configs/0.6b.yaml` (o mesmo do run local, mais
+rápido) ou `configs/1.7b.yaml` (só cabe com 6 GB ou mais). O model card publicado registra a GPU
+que de fato treinou e o tempo medido.
 
 ## Dados e licenças
 

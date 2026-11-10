@@ -3,7 +3,7 @@ from scripts import push_hub as ph
 
 def test_render_model_card_includes_metrics_and_license():
     meta = {"model_name": "Qwen/Qwen3-1.7B", "base_license": "apache-2.0",
-            "hours": 9.5, "gpu": "GTX 1060 6GB",
+            "hours": 9.5, "gpu": "GTX 1060 3GB",
             "eval": {"base": {"mcq_acc": 0.61}, "adapter": {"mcq_acc": 0.64}},
             "lora_r": 8, "effective_batch": 4, "epochs": 1}
     card = ph.render_model_card(meta)

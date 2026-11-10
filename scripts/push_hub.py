@@ -1,6 +1,8 @@
 """Publish adapter, GGUF, and dataset to the Hugging Face Hub with generated cards.
-Run on the laptop after `huggingface-cli login`:
-  uv run python scripts/06_push_hub.py --user <HF_USER> --config configs/1.7b.yaml
+Run after `huggingface-cli login` (or with HF_TOKEN set in the environment):
+  uv run python scripts/06_push_hub.py --config configs/0.6b.yaml --hours <measured>
+--user defaults to the account that owns the token; --gpu names the card that
+actually trained the adapter, so the model card never claims the wrong hardware.
 """
 from __future__ import annotations
 
@@ -73,9 +75,10 @@ attribution. CyberMetric is used for evaluation only and is not included here.
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--user", required=True)
+    ap.add_argument("--user", default=None, help="HF username; default: owner of the logged-in token")
     ap.add_argument("--config", required=True)
     ap.add_argument("--hours", type=float, required=True)
+    ap.add_argument("--gpu", default="GTX 1060 3GB", help="GPU that ran the training, as written on the model card")
     args = ap.parse_args()
     cfg = common.load_config(args.config)
     run = cfg["output_dir"]
@@ -85,7 +88,7 @@ def main() -> None:
         manifest = json.load(fh)
 
     meta = {"model_name": cfg["model_name"], "base_license": "apache-2.0",
-            "hours": args.hours, "gpu": "GTX 1060 6GB", "eval": ev,
+            "hours": args.hours, "gpu": args.gpu, "eval": ev,
             "max_length": cfg["max_length"],
             "lora_r": cfg["lora_r"],
             "effective_batch": cfg["per_device_train_batch_size"] * cfg["gradient_accumulation_steps"],
@@ -93,11 +96,12 @@ def main() -> None:
 
     from huggingface_hub import HfApi
     api = HfApi()
+    user = args.user or api.whoami()["name"]
 
     hub_name = cfg.get("hub_name", "decria-sec")
-    lora_repo = f"{args.user}/{hub_name}-lora"
-    gguf_repo = f"{args.user}/{hub_name}-GGUF"
-    data_repo = f"{args.user}/decria-sec-dataset"
+    lora_repo = f"{user}/{hub_name}-lora"
+    gguf_repo = f"{user}/{hub_name}-GGUF"
+    data_repo = f"{user}/decria-sec-dataset"
 
     api.create_repo(lora_repo, exist_ok=True)
     with open(os.path.join(run, "adapter", "README.md"), "w", encoding="utf-8") as fh:
